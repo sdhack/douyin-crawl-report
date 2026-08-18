@@ -6,6 +6,9 @@
 """
 import argparse, json, os, sys, urllib.request, concurrent.futures, time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe  # noqa: E402
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
     "Referer": "https://www.douyin.com/",
@@ -34,8 +37,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
     ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
-    ap.add_argument("--threads", type=int, default=int(os.environ.get("DL_THREADS", "3")))
+    ap.add_argument("--threads", type=int, default=None,
+                    help="并发下载线程数（缺省按机器配置调度 2..6）")
     a = ap.parse_args()
+
+    t = a.threads or probe.download_threads()
+    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 下载线程数={t}")
 
     mp = os.path.join(a.root, "video-analysis", a.account, "manifest.json")
     manifest = json.load(open(mp, encoding="utf-8"))
@@ -53,9 +60,9 @@ def main():
             pass
         return {"aweme_id": aid, "video_ok": ok, "note": sub}
 
-    print(f"[下载] 共 {len(manifest)} 条，并发 {a.threads} 线程")
+    print(f"[下载] 共 {len(manifest)} 条，并发 {t} 线程")
     results, t0 = [], time.time()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=a.threads) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=t) as ex:
         futs = [ex.submit(worker, it) for it in manifest]
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             r = fu.result()

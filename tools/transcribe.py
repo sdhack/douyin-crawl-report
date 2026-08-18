@@ -11,6 +11,9 @@
 import argparse, os, sys, time, glob, json
 import concurrent.futures
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe  # noqa: E402
+
 
 def find_cublas():
     """ctranslate2(自制 CUDA12) 需要 cublas64_12.dll；定位 pip 装目录并提前 PATH。"""
@@ -50,7 +53,8 @@ def main():
     ap.add_argument("--model", default="large-v3")
     ap.add_argument("--device", default="auto", help="auto/cuda/cpu")
     ap.add_argument("--compute", default="auto", help="auto/float16/int8/float32")
-    ap.add_argument("--workers", type=int, default=int(os.environ.get("TXP_WORKERS", "2")))
+    ap.add_argument("--workers", type=int, default=None,
+                    help="转写 worker 数（缺省按机器配置自动调度，GPU 宜少）")
     ap.add_argument("--map", default=None, help="术语纠错映射 json：{误词: 正词}")
     a = ap.parse_args()
 
@@ -69,13 +73,15 @@ def main():
 
     # 快检：全部已产成且未启用纠错映射时跳过模型加载（避免白噪声冷启动）
     if not terms and all(prod_exists(os.path.splitext(os.path.basename(m))[0]) for m in mp4s):
-        print(f"[skip-all] {len(mp4s)} 个视频均已产成，跳过模型加载与转写")
+        print(f"[skip-all] {len(mp4s)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(probe.has_gpu())}")
         return
 
     has_cuda = ctranslate2.get_cuda_device_count() > 0
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
     compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
-    print(f"[env] cuda_count={has_cuda} -> device={device}, compute={compute}（择优结果）")
+    print(f"[env] cuda_count={has_cuda}")
+    w = a.workers or probe.transcribe_workers(has_cuda)
+    print(f"[资源] {probe.snapshot(has_cuda)} -> device={device}/{compute}，转写worker数={w}")
 
     from faster_whisper import WhisperModel
     model = WhisperModel(a.model, device=device, compute_type=compute)
@@ -135,9 +141,9 @@ def main():
             pass
         return False
 
-    print(f"[start] {len(mp4s)} videos -> {od} ({device}, {a.workers} workers)")
+    print(f"[start] {len(mp4s)} videos -> {od} ({device}, {w} workers)")
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=a.workers) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
         futs = {ex.submit(one, mp): mp for mp in mp4s}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()

@@ -4,7 +4,10 @@
 用法: python tools/extract_frames.py --root <工作根> --account <slug> [--fps 1] [--workers N]
 输出: <root>/video-analysis/<account>/frames/<aweme_id>/*.jpg
 """
-import argparse, av, os, glob
+import argparse, av, os, glob, sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import probe  # noqa: E402
 
 
 def extract(mp4, out_dir, fps):
@@ -44,9 +47,12 @@ def main():
     ap.add_argument("--root", required=True)
     ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
     ap.add_argument("--fps", type=int, default=1, help="抽帧频率（帧/秒），精校抽帧默认 1")
-    ap.add_argument("--workers", type=int, default=min(os.cpu_count() or 2, 4),
-                    help="并行进程数（默认 min(CPU核,4)）")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="并行进程数（缺省按机器配置自动调度 min(核,4) 且受可用内存约束）")
     a = ap.parse_args()
+
+    w = a.workers or probe.frame_workers()
+    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 抽帧进程数={w}")
 
     vd = os.path.join(a.root, "videos", a.account)
     fd = os.path.join(a.root, "video-analysis", a.account, "frames")
@@ -54,11 +60,11 @@ def main():
 
     from multiprocessing import Pool
     total, n0 = 0, len(tasks)
-    with Pool(a.workers) as pool:
+    with Pool(w) as pool:
         for done, (aid, n) in enumerate(pool.imap_unordered(_worker, tasks), 1):
             total += n
             print(f"  [{done}/{n0}] {aid}: {n} 帧")
-    print(f"\n[完成] {n0} 视频，共 {total} 帧（进程数 {a.workers}）")
+    print(f"\n[完成] {n0} 视频，共 {total} 帧（进程数 {w}）")
 
 
 if __name__ == "__main__":
