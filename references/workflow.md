@@ -145,11 +145,11 @@ python tools/process.py --root <root> --account <account>
 # 阶段2b 多线程下载（默认3线程，规避CDN风控）
 python tools/download.py --root <root> --account <account> [--threads 3]
 
-# 阶段3a 抽帧（默认1fps；PyAV 绕开系统 ffmpeg 无图片编码器）
-python tools/extract_frames.py --root <root> --account <account> [--fps 1]
+# 阶段3a 抽帧（默认1fps；PyAV 多进程并行，默认 min(CPU核,4)）
+python tools/extract_frames.py --root <root> --account <account> [--fps 1] [--workers 4]
 
-# 阶段3b 口播转写（GPU 自动择优 float16≈快10x；多 worker；断点续传）
-python tools/transcribe.py --root <root> --account <account> [--model large-v3] [--workers 2] [--device auto] [--compute auto]
+# 阶段3b 口播转写（GPU 自动择优 float16≈快10x；多 worker；断点续传；--map 可订正术语误识）
+python tools/transcribe.py --root <root> --account <account> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]
 ```
 
 要点：
