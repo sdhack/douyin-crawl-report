@@ -13,19 +13,20 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 ## 流程概览（4 阶段）
 
-1. **抓取**（MediaCrawler）：detail 模式抓单个，creator 模式批量抓账号。断点续传 + 8–10s 间隔。**若发现漏抓，改用浏览器 fetch 直连 API 一次抓全**（见下方"修复 Bug"）。
-2. **数据处理**：去重（`dedup_data.py`）→ 整合 → 下载视频/封面 → 图文切分。
-3. **内容分析**：视频抽帧 → 真实视觉分析 → BGM 转写分类 → 直播话术校对口音误识别 → 各维度统计。
-4. **报告生成**：`generate_per_video_report.py` → 逐视频报告；撰写对标分析报告（账号定位/内容矩阵/带货逻辑/素材拆解/起号方案）。**对标分析报告必须遵循 `references/report-template.md` 的固定模板结构输出**（文档头→引言→数据样本构成→关键指标→核心结论→01~07 章节→附言），只替换占位数据、不改骨架。
+1. **抓取**（`tools/crawl.py`，技能内建 MediaCrawler 封装）：detail 模式抓单个，creator 模式批量抓账号。自动解析 MediaCrawler（env/全局指针/cache）、断点续传（`MC_CURSOR_DIR` 落项目）、进度写 `<root>/crawl_<account>/crawl.log`，产物落项目目录。`--dry-run` 可先预览命令。**若 MediaCrawler 本身抓取失败，先修 MediaCrawler 后再重抓，不切浏览器兜底。**
+   - **评论抓取**：`--get-comment` 默认关；对标拆解要做评论区分析时，用 `detail` 模式 + `--get-comment` 对全量 `aweme_id` 分批补抓评论（每次逗号分隔成批、`--max` 控每条视频上限），落 `<root>/crawl_<acct>/douyin/jsonl/detail_comments_*.jsonl`。评论 API 需登录态；追账期内登录态可直接复用（无需重复扫码）。**注意**：批处理循环用 python 脚本驱动（`subprocess`），勿用 `powershell -File` 拼中文路径（代码页会乱码导致整脚本早退）。
+2. **数据处理**：`process.py` 去重→manifest → `download.py` 下载视频/封面 → 图文切分。
+3. **内容分析**：`extract_frames.py` 视频抽帧（1fps）→ 真实视觉分析 → `transcribe_bgm.py` BGM 归档（风格/bgm强度/歌词线索，模型固定 large-v3）→ `bgm_cross.py` BGM×互动交叉统计（b组均值、爆款明细→`_cross.json`）→ 直播话术校对口音误识别 → 各维度统计。
+4. **报告生成**：撰写对标分析报告（账号/内容矩阵/文案/带货/直播/起号）。**内容必须遵循 `references/report-template.md` 的固定模板结构**（文档头→引言→数据样本构成→关键指标→核心结论→01~07 章节→附言），只替换占位数据、不改骨架。**HTML 渲染用技能内建 `tools/render_report.py` 一步渲染为自包含单文件**（干净卡片式，专项对齐 report-template：目录只收主章节、`## N *单位*` 数据样本卡、`# 大数字` 居中卡、`## 01~07` 章节 section、`>` 五类收治区自动着色、真实抽帧图 `--inline` 内联 base64）。**报告 HTML 一律经 `render_report.py` 直出：分析内容完成后直接经 `--stdin`（或 `--source`)一步渲染为 `{账号}-对标分析报告.html`，不落 `.md` 中间稿**；**每次渲染默认从内置 8 套视觉主题中随机轮换（内容骨架恒定不变、视觉不重样），可用 `--theme <name>` 指定、`--theme-seed <N>` 复现**（禁止手工平铺、禁止"又杂又乱"的长目录/杂元素堆积）。若用户要求视频级逆向拆解 / 账号级深度总结，按 `references/decompose-methodology.md` 补齐数据链（全量每条第11节标签 → `decompose/tags.json` → 爆款TOP+典型11节深拆），**并先跑 `tools/account_metrics.py` 自动聚合账号级维度（发布节奏 / 互动交叉聚类 / 话题策略+高赞评论 → `decompose/<account>/_metrics.json`，为博主总结必吃数据）**，再按 `references/blogger-summary-prompt.md` 的**博主全量视频总结提示词**对全部视频做账号级总结（定位/选题地图/Hook/内容结构/画面/用户需求/爆款对比/DNA/机会/最终输出），产出 Markdown 后同样经 `tools/render_report.py` 渲染为 HTML。
 
-详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`；报告固定模板见 `references/report-template.md`。
+详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`；报告固定模板见 `references/report-template.md`；逐视频逆向拆解见 `references/decompose-methodology.md`；**博主全量视频总结提示词（账号级）见 `references/blogger-summary-prompt.md`**。
 
 ## 实战优化要点（2026-08 迭代沉淀）
 
 ### 提速（Speed）
-- **抓取**：execjs 签名失效时，用浏览器内 `fetch` 直连 `aweme/v1/web/aweme/post/` API（复用浏览器自身 `a_bogus`），一次抓全（实测 9 页 162 条），比逐条重试快一个数量级。
+- **抓取**：抓取异常/漏抓时**优先修 MediaCrawler 自身**（签名参数、分页参数、登录态），核验真实视频数，**不切浏览器兜底**（历史上曾用浏览器内 fetch 直连 API 临时救急，已弃用——其与 MediaCrawler 抓取栈脱节，易再踩坑且违背"修根因"原则）。
 - **管线断点续传**：下载/抽帧/转写均按产出自动跳过已完成项，换新数据只处理增量（实测 162 条中仅重跑新增 105 条）。
-- **转写多进程**：口播用 faster-whisper medium + 6 worker CPU 并行（162 条约 21 分钟）；BGM 用 small 模型（45 首约 4 分钟）。
+- **转写同模型复用**：口播与 BGM 统一用 faster-whisper **large-v3**（GPU float16），BGM 复用口播已缓存的同一模型，**免二次联网下载**。
 - **阶段并行**：下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
 
 ### 提质（Quality）
@@ -35,7 +36,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 - **转写成功率 100%**：口播转写出现 error 自动补转，报告前确认 0 失败。
 
 ### 修复 Bug
-- **`a_bogus` 签名失效**（症状：API 返回截断数据、漏抓）：execjs 生成的签名与真实浏览器环境不一致。修复：浏览器内 `fetch` 直连，复用浏览器签名。
+- **`a_bogus` 签名失效**（症状：API 返回截断数据、漏抓）：核对该账号抓取栈的签名参数（`browser_version`/`os_name`/`pc_libra_divert`/`from_user_page` 等）并**修复 MediaCrawler 源码后重抓**，不切浏览器兜底。
 - **分页提前终止**（症状：`has_more=0` 但实际有更多数据）：请求参数缺 `from_user_page=1`、`show_live_replay_strategy=1`、`need_time_list=1` 等。修复：补全参数后逐页抓取。
 - **风控拦截（account blocked）**：签名参数（`browser_version`、`os_name`）与真实浏览器不一致。修复：从浏览器实时读取 `navigator` 信息动态生成参数，并加 `pc_libra_divert`。
 - **CDP 误关浏览器**：`browser.close()` 在 `connect_over_cdp` 模式下会关闭用户正在用的 Chrome。修复：脚本结束只断开连接，不调用 `browser.close()`。
@@ -49,26 +50,37 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 - 直播话术需人工校对口音误识别（产品名/工艺/茶底）
 - 报告图片用真实抽帧，不用 AI 生成图
 
+## 运行库与依赖策略（重要）
+
+- **运行库安装在项目目录**：分析运行库统一落在各项目 `<项目根>/.runtime/py`（faster-whisper/av/pillow/numpy/cublas 等 27 项），**不装 C 盘**。
+- **全局注册复用（换目录不重装）**：运行库路径写入全局指针 `~/.trae-cn/runtime-registry.json`，任何项目/目录调用都通过技能自带解析器 `tools/runtime.py` 复用同一套运行库：
+  - `py -3 <skill>/tools/runtime.py py`（打印运行库解释器路径）
+  - `py -3 <skill>/tools/runtime.py doctor`（校验依赖 + CUDA 探测）
+  - `py -3 <skill>/tools/runtime.py run --tool <name>.py --root <工作根> --account <slug> [args]`（用运行库解释器跑工具）
+  - 解析优先级：`DOUYIN_RUNTIME_PY` 环境变量 > 全局指针 > 项目 `.runtime/py`（仅此三档，技能旧 `.venv` 已弃用不参与解析）。
+- **抓取引擎** MediaCrawler venv 同样在全局指针登记（`keys.mediacrawler`）；其源码暂存于 `~/.cache/codex-mediacrawler/`。
+- **产物一律落项目目录**：视频→`videos/`、抽帧→`video-analysis/<账号>/frames`、转写→`transcript/`、模型缓存→项目 `models_cache/`（`HF_ENDPOINT`/`HF_HUB_DISABLE_XET=1` 已配置）。
+
 ## 内建一键流水线（tools/）
 
-本技能自带 `tools/` 可执行脚本，从"去重 → 下载 → 抽帧 → 口播转写"一条命令链跑通，统一输入 `<--root <工作根> --account <账号slug>>`：
-`patch_mediacrawler.py`（断点续传补丁）、`process.py`（去重+清单）、`download.py`（多线程下载）、`extract_frames.py`（PyAV 1fps 抽帧）、`transcribe.py`（faster-whisper GPU 择优+多worker+断点续传）。脚本均按产物自动断点续传，transcribe 用 `ctranslate2.get_cuda_device_count()` 自动 CPU/GPU 择优；各脚本并发/算力（`--threads`/`--workers`/device/compute）缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无**自适应调度**。完整用法见 `references/workflow.md` 附录与 `references/commands.md`。
+本技能自带 `tools/` 可执行脚本，从"**抓取 → 去重 → 下载 → 抽帧 → 口播转写**"一条命令链跑通，统一输入 `<--root <工作根> --account <账号slug>```，统一经 `tools/runtime.py run --tool` 走项目运行库解释器：
+`crawl.py`（抓取，MediaCrawler 封装）、`patch_mediacrawler.py`（断点续传补丁）、`process.py`（去重+清单）、`download.py`（多线程下载）、`extract_frames.py`（PyAV 1fps 抽帧）、`transcribe.py`（faster-whisper GPU 择优+多worker+断点续传）、`transcribe_bgm.py`（BGM 归档：风格+mood+歌词线索，**固定 large-v3**）、`bgm_cross.py`（BGM×互动交叉：组间均值·爆款明细→`_cross.json`）、`comments.py`（评论聚合：detail_comments jsonl 按视频归并、每视频按赞截断 top N→`comments.json`）、`decompose_prep.py`（组装每视频全维度档案→`video_profiles.{json,md}`）、`account_metrics.py`（账号级自动聚合：发布节奏 / 互动交叉聚类 / 话题策略 + 高赞评论 Top20 → `_metrics.json`）、`render_report.py`（对标报告 md→自包含 HTML 渲染，对齐 report-template 固定模板，`--inline` 内联真实抽帧守卫单文件）。脚本均按产物自动断点续传，transcribe* 用 `ctranslate2.get_cuda_device_count()` 自动 CPU/GPU 择优；各脚本并发/算力（`--threads`/`--workers`/device/compute）缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无**自适应调度**。完整用法见 `references/workflow.md` 附录与 `references/commands.md`。
 
 ## 输出契约
 
 | 阶段 | 产物 | 路径 |
 |---|---|---|
-| 抓取 | JSONL（去重后） | `data/douyin/jsonl/*_dedup.jsonl` |
-| 处理 | 视频/封面/图文 | `videos/`、`data/douyin/sheets|cells/` |
-| 分析 | 抽帧/视觉/BGM/话术 | `data/douyin/frames/`、`per_video_analysis.json` |
-| 报告 | 逐视频 + 对标 | `per-video-breakdown.html`、`douyin-tea-benchmark.html` |
+| 抓取 | JSONL（原始 + 过滤去重）+ 日志 | `crawl_<account>/`、`crawl_<account>/<account>_dedup.jsonl` |
+| 处理 | 下载清单（互动排序） | `video-analysis/<account>/manifest.json` |
+| 下载 | 视频 / 封面 | `videos/<account>/`、`covers/<account>/` |
+| 分析 | 抽帧 + 口播转写 | `video-analysis/<account>/frames/<aweme_id>/`、`transcript/<account>/` |
+| BGM | 归档 + 交叉统计 | `bgm/<account>/`（`_manifest.json`）、`bgm/<account>/_cross.json` |
+| 报告 | 对标 HTML（自包含单文件） | `{账号}-对标分析报告.html`、`{账号}-博主全量视频总结.html` |
+| 评论 | 聚合(每视频按赞截断) | `video-analysis/<account>/comments.json` |
+| 拆解 | 全量档案 + 账号级聚合 | `decompose/<account>/video_profiles.{json,md}`、`decompose/<account>/_metrics.json` |
 
 ## Output Quality Guardrails
 
-- Before final output, apply the likely failure modes in `reports/output-risk-profile.md` when that report is present.
-- Before rendering reports, tutorials, review pages, dashboards, or visual artifacts, apply the artifact direction and visual quality gates in `reports/artifact-design-profile.md` when that report is present.
-- When prompt behavior, role design, dialogue quality, or output contracts matter, apply `reports/prompt-quality-profile.md` when that report is present.
-- Before adding more structure, apply the boundary, feedback-loop, drift, and leverage-point checks in `reports/system-model.md` when that report is present.
 - Repair generic headings, cluttered notes, fragile visual assumptions, weak tables, and missing verification cues before handing work back.
 - Map role, task, and format into skill behavior rather than copying a large prompt template into `SKILL.md`.
 - Let the artifact's content choose the visual system; do not copy a fixed palette or report style from another skill without a clear reason.

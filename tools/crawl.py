@@ -1,0 +1,338 @@
+# -*- coding: utf-8 -*-
+"""douyin-crawl-report 技能第一阶段：调用 MediaCrawler 抓取抖音数据。
+
+MediaCrawler 本体不随技能复制，保留在 `~/.cache/codex-mediacrawler/MediaCrawler`，
+本脚本是技能内建的**轻量调度封装**：解析其解释器/源码根、拼接经校验的参数、
+断点续传、进度日志、并把产物落到项目目录（不占 C 盘）。
+
+用法:
+  # 账号主页全量
+  runtime.py run --tool crawl.py --root <根> --account <slug> \
+      --mode creator --target "<sec_uid>" --max 90
+  # 单条视频
+  ... --mode detail --target "<aweme_id>"
+  # 关键词搜索
+  ... --mode search --target "关键词"
+  # 想用 cookie 登录（复用已登录态）
+  ... --lt cookie --cookies "<cookie串>"
+  # 只打印将执行的命令，不真正爬（校验用）
+  ... --dry-run
+
+产物: <root>/crawl_<account>/  （原始 jsonl + 过滤去重 jsonl + crawl.log）
+下一阶段: runtime.py run --tool process.py --root <root> --account <account> --json <过滤后jsonl>
+"""
+import argparse
+import json
+import os
+import re
+import random
+import sys
+import glob
+import subprocess
+import time
+import datetime
+
+try:
+    import runtime  # noqa: F401  复用同目录 runtime.py 的解析逻辑
+except Exception:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import runtime
+
+PLATFORM = "dy"  # 抖音 固定
+_MODES = ("creator", "detail", "search")
+_LTS = ("qrcode", "cookie", "phone")
+# --speed 预设并发（MediaCrawler 抖音多 context 并行，2-3 已是安全偏激进上限）
+_SPEED_CONC = {"safe": 1, "normal": 2, "fast": 3}
+
+
+def _patch_verify(p, marker, pat, new):
+    """正则替换 MediaCrawler base_config 变量为 env 覆盖版，并回读验证生效（防静默假成功）。"""
+    src = open(p, encoding="utf-8-sig").read()
+    if marker in src:
+        return "already"
+    try:
+        bak = p + ".bak"
+        if not os.path.isfile(bak):
+            open(bak, "w", encoding="utf-8").write(src)
+        if not re.search(r"(?m)^import os", src):
+            src = "import os\n" + src
+        if not re.search(pat, src):
+            return "no-var"
+        src = re.sub(pat, new, src)
+        open(p, "w", encoding="utf-8", newline="").write(src)
+        # 回读校验：补丁必须真正落盘，否则报失败而非假装成功
+        return "patched" if marker in open(p, encoding="utf-8").read() else "verify-failed"
+    except Exception:
+        return None
+
+
+def ensure_mc_sleep_patch(mc_root):
+    """给 MediaCrawler base_config 打一次性 env 补丁：CRAWLER_MAX_SLEEP_SEC 可由 MC_SLEEP_SEC 覆盖。
+
+    不改逻辑默认值，仅注入 env。返回 ('patched'|'already'|'no-var'|'verify-failed'|None)。"""
+    p = os.path.join(mc_root, "config", "base_config.py")
+    if not os.path.isfile(p):
+        return None
+    pat = r"CRAWLER_MAX_SLEEP_SEC\s*=\s*(?:int|float)\([^)]*\)|\d+(?:\.\d+)?"
+    return _patch_verify(p, "MC_SLEEP_SEC", pat,
+                         'CRAWLER_MAX_SLEEP_SEC = float(os.getenv("MC_SLEEP_SEC", "10"))')
+
+
+def ensure_mc_comments_patch(mc_root):
+    """给 MediaCrawler base_config 打一次性 env 补丁：单视频评论上限
+    CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES 可由 MC_COMMENTS_COUNT 覆盖。"""
+    p = os.path.join(mc_root, "config", "base_config.py")
+    if not os.path.isfile(p):
+        return None
+    pat = r"CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES\s*=\s*\d+"
+    return _patch_verify(p, "MC_COMMENTS_COUNT", pat,
+                         'CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = int(float(os.getenv("MC_COMMENTS_COUNT", "10")))')
+
+
+def rollback_mc_sleep_patch(mc_root):
+    """回滚上次 sleep 补丁（有 .bak 时恢复）。"""
+    p = os.path.join(mc_root, "config", "base_config.py")
+    bak = p + ".bak"
+    if os.path.isfile(bak):
+        open(p, "w", encoding="utf-8").write(open(bak, encoding="utf-8").read())
+        return True
+    return False
+
+
+def resolve_mc():
+    py = runtime.mc_py()
+    root = runtime.mc_root()
+    if not py or not root or not os.path.isfile(os.path.join(root, "main.py")):
+        sys.exit("[ERR] 未找到 MediaCrawler：请先在本机安装并用 runtime.py register 登记。")
+    return py, root
+
+
+def build_cmd(a, mc_root):
+    cmd = [a.mc_py, os.path.join(mc_root, "main.py"),
+           "--platform", PLATFORM,
+           "--type", a.mode,
+           "--save_data_option", "jsonl",
+           "--save_data_path", a.save_dir,
+           "--get_comment", str(a.get_comment).lower()[:1],
+           "--max_concurrency_num", str(a.concurrency),
+           "--headless", str(a.headless).lower()[:1],
+           "--crawler_max_notes_count", str(a.max)]
+    if a.mode == "creator":
+        cmd += ["--creator_id", a.target]
+    elif a.mode == "detail":
+        cmd += ["--specified_id", a.target]
+    else:
+        cmd += ["--keywords", a.target]
+    if a.lt:
+        cmd += ["--lt", a.lt]
+    if a.lt == "cookie" and a.cookies:
+        cmd += ["--cookies", a.cookies]
+    return cmd
+
+
+def tee_run(py, main_args, mc_root, log_path, env, timeout=None):
+    """流式执行：逐行回显到控制台 + 写入日志。返回退出码。
+
+    timeout=None 时不限时（长任务不误杀）；给定秒数则超时后 terminate 并返回 -9。
+    用泵线程读 stdout，避免子进程在未产输出时永久挂起主线程。"""
+    proc = subprocess.Popen(
+        [py, main_args[0]] + main_args[1:],
+        cwd=mc_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+    )
+    import threading
+    errors = []
+
+    def pump():
+        with open(log_path, "w", encoding="utf-8") as lf:
+            try:
+                for line in proc.stdout:
+                    ts = datetime.datetime.now().strftime("%H:%M:%S")
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    lf.write(f"[{ts}] {line}")
+            except Exception as e:
+                errors.append(str(e))
+
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    try:
+        rc = proc.wait(timeout=timeout)
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
+        raise
+    except subprocess.TimeoutExpired:
+        proc.terminate()
+        proc.wait()
+        print(f"[超时] 抓取超过 {timeout} 秒，已终止（可用 --max-min 调大重试）")
+        return -9
+    t.join()
+    return rc
+
+
+def newest_raw(save_dir):
+    files = glob.glob(os.path.join(save_dir, "**", "*.jsonl"), recursive=True)
+    files = [f for f in files if "contents" in os.path.basename(f)]
+    if not files:
+        return None
+    return max(files, key=os.path.getmtime)
+
+
+def filter_dedup(raw, out, keyword):
+    kw = keyword
+    seen, counts = set(), {"total": 0, "matched": 0, "unique": 0}
+    with open(raw, encoding="utf-8") as fi, open(out, "w", encoding="utf-8") as fo:
+        for line in fi:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            counts["total"] += 1
+            blob = (j.get("desc") or "") + "|" + (j.get("nickname") or "") + "|" + (j.get("author_word") or "")
+            if kw and kw not in blob:
+                continue
+            counts["matched"] += 1
+            aid = j.get("aweme_id")
+            if not aid or aid in seen:
+                continue
+            seen.add(aid)
+            counts["unique"] += 1
+            fo.write(json.dumps(j, ensure_ascii=False) + "\n")
+    return counts
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", required=True, help="工作根目录（产物将落在 <root>/crawl_<account>）")
+    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--mode", choices=_MODES, required=True, help="creator=账号全量 / detail=单条 / search=关键词")
+    ap.add_argument("--target", required=True, help="creator: sec_uid；detail: aweme_id/URL；search: 关键词")
+    ap.add_argument("--max", type=int, default=100, help="最大抓取数 (crawler_max_notes_count)")
+    ap.add_argument("--lt", choices=_LTS, default="qrcode", help="登录方式")
+    ap.add_argument("--cookies", default=None, help="cookie 登录时的 cookie 串")
+    ap.add_argument("--get-comment", dest="get_comment", action="store_true", help="抓一级评论（默认关，提速）")
+    ap.add_argument("--comments-count", type=int, default=100,
+                    help="单视频最多抓取的一级评论数（默认100；MediaCrawler 出厂硬编码10，本参数会打 env 补丁覆盖）")
+    ap.add_argument("--headless", action="store_true", help="无头模式")
+    ap.add_argument("--speed", choices=_SPEED_CONC, default=None,
+                    help="预设档：safe=并发1(默认) / normal=并发2 / fast=并发3（快档风控风险更高）")
+    ap.add_argument("--concurrency", type=int, default=None, help="显式并发数（覆盖 --speed 预设）")
+    ap.add_argument("--sleep-min", type=float, default=None, help="随机延时下限(秒)，启用即给 MediaCrawler 打 env 补丁改其固定 sleep")
+    ap.add_argument("--sleep-max", type=float, default=None, help="随机延时上限(秒)，与 --sleep-min 成对")
+    ap.add_argument("--retry-fail", type=int, default=0, help="抓取失败(非0退出/超时)自动重试次数，指数退避")
+    ap.add_argument("--max-min", type=float, default=None,
+                    help="单次抓取最大运行分钟数（防子进程永久挂起；缺省不限时，长任务不误杀）")
+    ap.add_argument("--no-mc-patch", action="store_true", help="不修改 MediaCrawler 源码（仅改用并发提速，随机延时参数失效）")
+    ap.add_argument("--save-dir", dest="save_dir", default=None, help="抓取产物目录（缺省 <root>/crawl_<account>）")
+    ap.add_argument("--account-filter", dest="kw", default=None, help="过滤关键词（缺省用 --account，用于剔除混入的其它账号数据）")
+    ap.add_argument("--dry-run", action="store_true", help="只打印命令，不实际爬取")
+    a = ap.parse_args()
+
+    a.mc_py, mc_root = resolve_mc()
+    a.save_dir = a.save_dir or os.path.join(a.root, "crawl_" + a.account)
+    os.makedirs(os.path.join(a.save_dir, "cursor"), exist_ok=True)
+    a.speed = a.speed or "safe"
+    a.concurrency = a.concurrency or _SPEED_CONC[a.speed]
+    if a.sleep_min is not None or a.sleep_max is not None:
+        if a.sleep_min is None or a.sleep_max is None:
+            sys.exit("[ERR] --sleep-min 与 --sleep-max 需成对提供")
+        if a.sleep_max < a.sleep_min:
+            sys.exit("[ERR] --sleep-max 不得小于 --sleep-min")
+
+    cmd = build_cmd(a, mc_root)
+    pretty = " \\\n  ".join(cmd)
+    print("=" * 70)
+    print(f"[MediaCrawler] 平台=dy 模式={a.mode} 目标={a.target} 上限={a.max}")
+    print(f"[命令] {pretty}")
+
+    env = dict(os.environ)
+    env["MC_CURSOR_DIR"] = os.path.join(a.save_dir, "cursor")  # 断点续传落项目目录
+    env.setdefault("PYTHONUNBUFFERED", "1")
+
+    # —— 随机延时落地：给 MediaCrawler base_config 打 env 补丁，抓取间隔由 MC_SLEEP_SEC 覆盖 ——
+    if a.sleep_min is not None:
+        if a.no_mc_patch:
+            print("[提示] --no-mc-patch 已启用，--sleep-min/--sleep-max 不生效（仍用 MediaCrawler 固定延时）")
+        else:
+            r = ensure_mc_sleep_patch(mc_root)
+            if r not in ("patched", "already"):
+                print(f"[延时补丁] 失败({r})：MediaCrawler base_config 未能由 MC_SLEEP_SEC 覆盖，本参数不生效")
+                print("  建议：检查 MediaCrawler 是否含 CRAWLER_MAX_SLEEP_SEC 变量，或用 --no-mc-patch 仅并发提速")
+            else:
+                print(f"[延时补丁] {r}（base_config 已可由 MC_SLEEP_SEC 覆盖）")
+                env["MC_SLEEP_SEC"] = str(round(random.uniform(a.sleep_min, a.sleep_max), 2))
+                print(f"[随机延时] 本次抓取 MC_SLEEP_SEC={env['MC_SLEEP_SEC']}s（MediaCrawler 内部取 uniform(0, 此值)）")
+
+    # —— 评论数上限落地：MediaCrawler 出厂单视频 10 条，打 env 补丁让 MC_COMMENTS_COUNT 覆盖 ——
+    if a.get_comment and a.comments_count != 10:
+        r = ensure_mc_comments_patch(mc_root)
+        env["MC_COMMENTS_COUNT"] = str(a.comments_count)
+        print(f"[评论数补丁] {r}（CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES 可由 MC_COMMENTS_COUNT 覆盖）")
+        print(f"[评论数] 本次单视频上限 MC_COMMENTS_COUNT={env['MC_COMMENTS_COUNT']} 条")
+
+    if a.dry_run:
+        print("-" * 70)
+        print("[dry-run] 未执行。环境: MC_CURSOR_DIR=", env["MC_CURSOR_DIR"],
+              " MC_SLEEP_SEC=", env.get("MC_SLEEP_SEC"),
+              " MC_COMMENTS_COUNT=", env.get("MC_COMMENTS_COUNT"), " 并发=", a.concurrency)
+        return
+
+    log_path = os.path.join(a.save_dir, "crawl.log")
+    print(f"[日志] {log_path}")
+
+    # —— 失败自动重试（指数退避：5s→10s→20s→...→封顶60s）———
+    attempts = a.retry_fail + 1
+    rc = None
+    for i in range(1, attempts + 1):
+        if i > 1 and a.sleep_min is not None and not a.no_mc_patch:
+            env["MC_SLEEP_SEC"] = str(round(random.uniform(a.sleep_min, a.sleep_max), 2))
+            print(f"[随机延时] 第 {i} 次尝试重随机 MC_SLEEP_SEC={env['MC_SLEEP_SEC']}s")
+        print(f"[尝试 {i}/{attempts}]")
+        timeout = a.max_min * 60 if a.max_min else None
+        rc = tee_run(a.mc_py, cmd[1:], mc_root, log_path, env, timeout=timeout)
+        print(f"[退出码] {rc}")
+        if rc == 0:
+            break
+        if i < attempts:
+            wait = min(60, 5 * (2 ** (i - 1)))
+            print(f"[重试] 退出码 {rc}，{wait}s 后重试...")
+            time.sleep(wait)
+
+    # —— 产物判定：detail+get_comment 看 detail_comments_*.jsonl（勿用账号关键词过滤，会误删评论） ——
+    comment_mode = (a.mode == "detail") and a.get_comment
+    if comment_mode:
+        cps = glob.glob(os.path.join(a.save_dir, "**", "detail_comments*.jsonl"), recursive=True)
+        if not cps:
+            print("[提示] 未发现 detail_comments_*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
+            sys.exit(rc or 1)
+        print("=" * 70)
+        print(f"[评论产物] {len(cps)} 个 detail_comments_*.jsonl：")
+        for f in sorted(cps):
+            print("  " + f)
+        print(f"[下一阶段] runtime.py run --tool comments.py --root \"{a.root}\" --account \"{a.account}\" --max {a.comments_count}")
+        sys.exit(0)
+
+    raw = newest_raw(a.save_dir)
+    if not raw:
+        print("[提示] save_dir 下未发现 *_contents*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
+        sys.exit(rc or 1)
+
+    # search 模式按关键词找内容，不应再用账号 slug 过滤（会误删相关结果）；仅 creator 模式默认按账号关键词剔除混入数据
+    kw = a.kw or (a.account if a.mode == "creator" else None)
+    filtered = os.path.join(a.save_dir, f"{a.account}_dedup.jsonl")
+    counts = filter_dedup(raw, filtered, kw)
+    print("=" * 70)
+    print(f"[原始文件] {raw}")
+    print(f"[去重文件] {filtered}")
+    print(f"[统计] 原始 {counts['total']} 行 | 含'{kw or '(不过滤)'}' {counts['matched']} | 去重后唯一 {counts['unique']}")
+    print("-" * 70)
+    print(f"[下一阶段] runtime.py run --tool process.py --root \"{a.root}\" --account \"{a.account}\" --json \"{filtered}\"")
+    sys.exit(0 if counts["unique"] else 1)
+
+
+if __name__ == "__main__":
+    main()

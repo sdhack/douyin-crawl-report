@@ -71,12 +71,40 @@ def main():
 
     terms = load_terms(a.map)
 
-    # 快检：全部已产成且未启用纠错映射时跳过模型加载（避免白噪声冷启动）
-    if not terms and all(prod_exists(os.path.splitext(os.path.basename(m))[0]) for m in mp4s):
-        print(f"[skip-all] {len(mp4s)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(probe.has_gpu())}")
-        return
+    def rewrite_corrected(tp, jp, terms):
+        """对已产成 .txt/.json 的文本层做术语订正；有改动返回 True。"""
+        try:
+            with open(tp, encoding="utf-8") as f:
+                txt = f.read()
+            if not any(k in txt for k in terms):
+                return False
+            with open(tp, "w", encoding="utf-8") as f:
+                f.write(correct(txt, terms))
+            data = json.load(open(jp, encoding="utf-8"))
+            for seg in data.get("segments", []):
+                seg["text"] = correct(seg.get("text", ""), terms)
+            json.dump(data, open(jp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+            return True
+        except Exception:
+            return False
+
+    def prod_missing(mp4):
+        return not prod_exists(os.path.splitext(os.path.basename(mp4))[0])
 
     has_cuda = ctranslate2.get_cuda_device_count() > 0
+
+    # 快检：全部已产成 → 不解码模型；有 --map 仅对已有产物就地订正文本层
+    if all(not prod_missing(m) for m in mp4s):
+        if terms:
+            n_fix = sum(rewrite_corrected(os.path.join(od, os.path.splitext(os.path.basename(m))[0] + ".txt"),
+                                          os.path.join(od, os.path.splitext(os.path.basename(m))[0] + ".json"),
+                                          terms) for m in mp4s)
+            print(f"[skip-all] {len(mp4s)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}")
+        else:
+            print(f"[skip-all] {len(mp4s)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}")
+        return
+
+    pending = [m for m in mp4s if prod_missing(m)]
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
     compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
     print(f"[env] cuda_count={has_cuda}")
@@ -92,11 +120,6 @@ def main():
         aid = os.path.splitext(os.path.basename(mp4))[0]
         tp = os.path.join(od, aid + ".txt")
         jp = os.path.join(od, aid + ".json")
-        if prod_exists(aid):
-            if terms:
-                # 已有产物但启用了映射：仅重写文本层做订正
-                rewrite_corrected(tp, jp, terms)
-            return aid, "skip"
         t0 = time.time()
         try:
             segs, info = model.transcribe(
@@ -120,38 +143,16 @@ def main():
         except Exception as e:
             return aid, f"ERR {str(e)[:80]}"
 
-    def rewrite_corrected(tp, jp, terms):
-        try:
-            with open(tp, encoding="utf-8") as f:
-                txt = f.read()
-            from datetime import datetime
-            import re
-            def fix_seg(field):
-                # json 段文本订正后回写
-                data = json.load(open(jp, encoding="utf-8"))
-                for seg in data.get("segments", []):
-                    seg["text"] = correct(seg.get("text", ""), terms)
-                json.dump(data, open(jp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-            if any(k in txt for k in terms):
-                with open(tp, "w", encoding="utf-8") as f:
-                    f.write(correct(txt, terms))
-                fix_seg(jp)
-                return True
-        except Exception:
-            pass
-        return False
-
-    print(f"[start] {len(mp4s)} videos -> {od} ({device}, {w} workers)")
+    print(f"[start] {len(pending)} videos -> {od} ({device}, {w} workers)")
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
-        futs = {ex.submit(one, mp): mp for mp in mp4s}
+        futs = {ex.submit(one, mp): mp for mp in pending}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()
             results.append(note)
-            print(f"  [{i}/{len(mp4s)}] {aid}: {note}")
+            print(f"  [{i}/{len(pending)}] {aid}: {note}")
     errs = [r for r in results if r.startswith("ERR")]
-    skips = [r for r in results if r == "skip"]
-    print(f"[done] total={len(results)} ok={len(results)-len(errs)-len(skips)} skip={len(skips)} err={len(errs)}")
+    print(f"[done] total={len(pending)} ok={len(pending)-len(errs)} err={len(errs)}")
     if errs:
         sys.exit(1)
 

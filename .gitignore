@@ -1,0 +1,20 @@
+# ---- 生产垃圾/运行时产物（禁止进版本库） ----
+
+# 弃用运行库（当前运行库装在项目 <root>/.runtime/py，经全局指针复用）
+.venv/
+venv/
+
+# 与技能无关的遥测/report-factory 产物
+reports/
+agents/
+
+# Python 字节码缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# 操作系统/IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

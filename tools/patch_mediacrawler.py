@@ -96,8 +96,14 @@ def main():
         sys.exit(f"[ERR] 未找到 MediaCrawler douyin/client.py。请传入路径：python tools/patch_mediacrawler.py <client.py>")
 
     src = io.open(client, encoding="utf-8").read()
-    if "\nimport os\n" not in src:
-        src = src.replace("import asyncio\n", "import asyncio\nimport os\n", 1)
+    # 注入方法体用到 os / json，缺一都会在运行时 NameError（假依赖），故一并确保
+    if "\nimport os\n" not in src and "\nimport json\n" not in src:
+        src = src.replace("import asyncio\n", "import asyncio\nimport os\nimport json\n", 1)
+    else:
+        if "\nimport os\n" not in src:
+            src = src.replace("import asyncio\n", "import asyncio\nimport os\n", 1)
+        if "\nimport json\n" not in src:
+            src = src.replace("import asyncio\n", "import asyncio\nimport json\n", 1)
 
     count = src.count(OLD_METHOD)
     if count != 1:
