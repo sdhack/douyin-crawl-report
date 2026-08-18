@@ -1,0 +1,23 @@
+{
+  "name": "douyin-crawl-report",
+  "version": "0.1.0",
+  "owner": "Gao Ming",
+  "updated_at": "2026-08-17",
+  "status": "active",
+  "maturity_tier": "reusable",
+  "lifecycle_stage": "reusable",
+  "context_budget_tier": "production",
+  "review_cadence": "monthly",
+  "skill_archetype": "scaffold",
+  "target_platforms": [
+    "openai",
+    "claude",
+    "generic",
+    "agent-skills-compatible",
+    "vscode"
+  ],
+  "factory_components": [
+    "references",
+    "reports"
+  ]
+}

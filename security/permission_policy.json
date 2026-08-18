@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "reviewed_at": "2026-08-18",
+  "capabilities": {
+    "network": {
+      "approved": true,
+      "note": "抓取抖音公开数据、下载视频/BGM/封面"
+    },
+    "file_write": {
+      "approved": true,
+      "note": "写入 jsonl、视频、抽帧、转写与报告产物"
+    },
+    "subprocess": {
+      "approved": true,
+      "note": "运行 MediaCrawler、ffmpeg、faster-whisper 等分析脚本"
+    }
+  }
+}

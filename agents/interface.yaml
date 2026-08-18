@@ -1,0 +1,26 @@
+interface:
+  display_name: "抖音账号抓取与报告生成"
+  short_description: "从抖音账号/视频 URL 抓取视频数据（单个+批量），经数据处理、视觉/BGM/话术分析后生成对标分析报告。Invoke when user wants to "
+  default_prompt: "Use $douyin-crawl-report when you need to 从抖音账号/视频 URL 抓取视频数据（单个+批量），经数据处理、视觉/BGM/话术分析后生成对标分析报告。Invoke when user wants to crawl a Douyin creator's videos by account URL and produce an analysis report."
+compatibility:
+  canonical_format: "agent-skills"
+  adapter_targets:
+    - "openai"
+    - "claude"
+    - "generic"
+    - "vscode"
+  activation:
+    mode: "manual"
+    paths: []
+  execution:
+    context: "inline"
+    shell: "bash"
+  trust:
+    source_tier: "local"
+    remote_inline_execution: "forbid"
+    remote_metadata_policy: "allow-metadata-only"
+  degradation:
+    openai: "metadata-adapter"
+    claude: "neutral-source-plus-adapter"
+    generic: "neutral-source"
+    vscode: "agent-skills-source-with-vscode-notes"
