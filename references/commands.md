@@ -9,6 +9,8 @@
 | 关键词搜索 | `uv run main.py --platform dy --lt qrcode --type search --keywords "关键词" --crawler_max_notes_count 30` |
 | Cookie 登录 | `uv run main.py --platform dy --lt cookie --cookies "{cookie串}" --type creator --creator_id "{sec_uid}"` |
 
+> **注意（实战踩坑 2026-08-18）**：① 平台枚举是 `dy`（**不是** `douyin`，否则 `click` 报 `'douyin' is not one of 'xhs','dy',...`）；② creator 批量用 **`--creator_id`**（支持 URL 或 sec_uid），**不用** `--keywords`；③ 条数用 **`--crawler_max_notes_count`**（没有 `--max_pages`）；④ 用 `uv run` 或 MediaCrawler 自带 **`.venv\Scripts\python.exe`**（系统 python 缺 playwright → `ModuleNotFoundError`）。
+
 ## 漏抓兜底（浏览器 fetch 直连，2026-08 新增）
 
 | 脚本 | 用途 |
