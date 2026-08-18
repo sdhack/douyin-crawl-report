@@ -16,9 +16,9 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 1. **抓取**（MediaCrawler）：detail 模式抓单个，creator 模式批量抓账号。断点续传 + 8–10s 间隔。**若发现漏抓，改用浏览器 fetch 直连 API 一次抓全**（见下方"修复 Bug"）。
 2. **数据处理**：去重（`dedup_data.py`）→ 整合 → 下载视频/封面 → 图文切分。
 3. **内容分析**：视频抽帧 → 真实视觉分析 → BGM 转写分类 → 直播话术校对口音误识别 → 各维度统计。
-4. **报告生成**：`generate_per_video_report.py` → 逐视频报告；撰写对标分析报告（账号定位/内容矩阵/带货逻辑/素材拆解/起号方案）。
+4. **报告生成**：`generate_per_video_report.py` → 逐视频报告；撰写对标分析报告（账号定位/内容矩阵/带货逻辑/素材拆解/起号方案）。**对标分析报告必须遵循 `references/report-template.md` 的固定模板结构输出**（文档头→引言→数据样本构成→关键指标→核心结论→01~07 章节→附言），只替换占位数据、不改骨架。
 
-详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`。
+详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`；报告固定模板见 `references/report-template.md`。
 
 ## 实战优化要点（2026-08 迭代沉淀）
 
