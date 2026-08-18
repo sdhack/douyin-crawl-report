@@ -49,6 +49,11 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 - 直播话术需人工校对口音误识别（产品名/工艺/茶底）
 - 报告图片用真实抽帧，不用 AI 生成图
 
+## 内建一键流水线（tools/）
+
+本技能自带 `tools/` 可执行脚本，从"去重 → 下载 → 抽帧 → 口播转写"一条命令链跑通，统一输入 `<--root <工作根> --account <账号slug>>`：
+`patch_mediacrawler.py`（断点续传补丁）、`process.py`（去重+清单）、`download.py`（多线程下载）、`extract_frames.py`（PyAV 1fps 抽帧）、`transcribe.py`（faster-whisper GPU 择优+多worker+断点续传）。脚本均按产物自动断点续传，transcribe 用 `ctranslate2.get_cuda_device_count()` 自动 CPU/GPU 择优。完整用法见 `references/workflow.md` 附录与 `references/commands.md`。
+
 ## 输出契约
 
 | 阶段 | 产物 | 路径 |

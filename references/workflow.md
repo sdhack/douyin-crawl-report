@@ -119,3 +119,42 @@ uv run python generate_per_video_report.py   # → per-video-breakdown.html
 对标报告标准章节：账号定位 → 内容矩阵 → 文案写作逻辑 → 带货与变现逻辑 → 衰退归因 → TOP 素材拆解库 → 起号方案。
 
 **提质要点**：报告硬编码数字（总赞/均赞/分类条数/爆款榜/时间范围）必须与最新数据集一致；换新数据后逐段核对封面、概览、趋势、分类、爆款拆解、对标基准、数据来源，避免沿用旧样本。
+
+## 附录：技能内建一键流水线（tools/，2026-08 新增，优先使用）
+
+本技能自带可执行脚本 `tools/`，可脱离特定 MediaCrawler 项目目录独立运行。统一的工作目录结构（`<root>` 为任意工作根，`<account>` 为账号 slug 如 `nutelande`）：
+
+```
+<root>/data/douyin/jsonl/*.jsonl         process 读取原始 jsonl
+<root>/video-analysis/<account>/manifest.json   process 生成下载清单
+<root>/videos/<account>/*.mp4            download 下载视频
+<root>/covers/<account>/*.jpg            download 下载封面
+<root>/video-analysis/<account>/frames/*.jpg    extract_frames 抽帧
+<root>/transcript/<account>/*.txt|.json  transcribe 口播转写
+```
+
+从去重到转写的完整命令链：
+
+```powershell
+# 0) 给 MediaCrawler 打断点续传补丁（一次性；路径缺省自动探测）
+python tools/patch_mediacrawler.py [<MediaCrawler douyin/client.py>]
+
+# 阶段2 去重 + 生成清单（--json 缺省取最新 jsonl）
+python tools/process.py --root <root> --account <account>
+
+# 阶段2b 多线程下载（默认3线程，规避CDN风控）
+python tools/download.py --root <root> --account <account> [--threads 3]
+
+# 阶段3a 抽帧（默认1fps；PyAV 绕开系统 ffmpeg 无图片编码器）
+python tools/extract_frames.py --root <root> --account <account> [--fps 1]
+
+# 阶段3b 口播转写（GPU 自动择优 float16≈快10x；多 worker；断点续传）
+python tools/transcribe.py --root <root> --account <account> [--model large-v3] [--workers 2] [--device auto] [--compute auto]
+```
+
+要点：
+- **环境依赖**：process/download 仅需标准库；extract_frames 需 `av` + `Pillow`；transcribe 需 `faster-whisper`、`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（脚本自动把其 bin 加入 PATH 以解决 `cublas64_12.dll not found`）。
+- **断点续传**：download / extract_frames / transcribe 均按产物已存在自动跳过，换新数据重跑即增量补齐。
+- **CPU vs GPU 择优**：transcribe 内部用 `ctranslate2.get_cuda_device_count()` 探测，`--device`/`--compute` 默认 `auto` 自动选 cuda/float16 或 cpu/int8，无需手试。
+- **多线程**：download `--threads`（默认3）、transcribe `--workers`（共享单模型，默认2）。
+- **报告**：基于 `transcript/` 与 `manifest.json` 撰写，严格遵循 `references/report-template.md` 固定模板；报告用图取 `covers/` 与 `frames/` 的真实素材。

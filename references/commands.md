@@ -63,3 +63,27 @@
 | `data/douyin/sheets/` `cells/` | 图文拼图/格子图 |
 | `data/douyin/per_video_analysis.json` | 逐视频视觉/BGM 分析 |
 | `videos/{aweme_id}/` | 下载的视频与封面 |
+
+## 技能内建脚本（tools/，2026-08 新增，优先使用）
+
+全流程脚本随技能自带，基于统一 `<root>` + `<account>` 参数运行，详见 `workflow.md` 附录。
+
+| 脚本 | 命令 | 产出 |
+|---|---|---|
+| `tools/patch_mediacrawler.py` | `python tools/patch_mediacrawler.py [<client.py>]` | 给 MediaCrawler 打断点续传补丁（一次性） |
+| `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
+| `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
+| `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1]` | PyAV 抽帧（绕开 ffmpeg 无图片编码器） |
+| `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto]` | 口播转写（GPU 自动择优 + 断点续传） |
+
+**tools/ 数据目录约定**：
+
+| 路径 | 内容 |
+|---|---|
+| `<root>/video-analysis/<account>/manifest.json` | 下载清单（含互动指标、URL，按赞排序） |
+| `<root>/video-analysis/<account>/frames/<aweme_id>/*.jpg` | 抽帧（1fps） |
+| `<root>/videos/<account>/*.mp4` | 视频 |
+| `<root>/covers/<account>/*.jpg` | 封面 |
+| `<root>/transcript/<account>/*.txt \| *.json` | 口播逐字稿 + 结构化 JSON |
+
+**tools/ 环境依赖**：`extract_frames` 需 `av`+`Pillow`；`transcribe` 需 `faster-whisper`+`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（解决 `cublas64_12.dll not found`，脚本自动把 bin 加入 PATH）。
