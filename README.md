@@ -17,11 +17,11 @@
 
 ```mermaid
 flowchart LR
-    A["① 抓取<br/>MediaCrawler / 浏览器fetch直连<br/>断点续传 · 8~10s智能间隔"] --> B["② 数据处理<br/>去重 · 排序<br/>download多线程下载"]
-    B --> C["③ 内容分析<br/>抽帧(fps=1) · 口播GPU转写<br/>BGM分类 · 话术校对口音"]
-    C --> D["④ 报告生成<br/>逐视频拆解<br/>固定模板对标分析"]
-    A -.增量.->|awaitable_id断点| A
-    D -.→.-> A
+    A["① 抓取 · 断点续传 · 8~10s间隔"] --> B["② 数据处理 · 去重 · 多线程下载"]
+    B --> C["③ 内容分析 · 抽帧 · GPU口播转写 · 话术纠错"]
+    C --> D["④ 报告生成 · 固定模板对标分析"]
+    A -.->|增量| A
+    D -.->|下一账号| A
 ```
 
 - 详细步骤 → [`references/workflow.md`](./references/workflow.md)
