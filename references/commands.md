@@ -76,6 +76,8 @@
 | `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--workers 4]` | PyAV 抽帧（多进程并行，默认 min(CPU核,4)） |
 | `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 口播转写（GPU 择优 + 断点续传；`--map` 术语纠错订正误识） |
 
+**资源自适应调度（tools/probe.py）**：`download --threads`、`extract_frames --workers`、`transcribe --workers` 缺省按机器配置自动取值——`CPU 核数 + 内存占用率(可用GB) + GPU 有无`。GPU 存在→转写 worker 少（共享显存，宜 2）；无 GPU→CPU 用剩余核并切 int8 且按内存封顶；抽帧按 `min(核,4)` 且受可用内存约束防 OOM。显式传参可覆盖推荐值。
+
 **tools/ 数据目录约定**：
 
 | 路径 | 内容 |

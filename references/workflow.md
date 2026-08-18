@@ -156,5 +156,5 @@ python tools/transcribe.py --root <root> --account <account> [--model large-v3] 
 - **环境依赖**：process/download 仅需标准库；extract_frames 需 `av` + `Pillow`；transcribe 需 `faster-whisper`、`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（脚本自动把其 bin 加入 PATH 以解决 `cublas64_12.dll not found`）。
 - **断点续传**：download / extract_frames / transcribe 均按产物已存在自动跳过，换新数据重跑即增量补齐。
 - **CPU vs GPU 择优**：transcribe 内部用 `ctranslate2.get_cuda_device_count()` 探测，`--device`/`--compute` 默认 `auto` 自动选 cuda/float16 或 cpu/int8，无需手试。
-- **多线程**：download `--threads`（默认3）、transcribe `--workers`（共享单模型，默认2）。
+- **并发自适应（推荐）**：`download --threads`、`extract_frames --workers`、`transcribe --workers` 缺省由 `tools/probe.py` 按 `CPU核数 + 内存占用率(可用GB) + GPU有无` 自动调度（本机 20 核 / 17GB 可用 / GPU → 下载 6、抽帧 4、转写 GPU 2）；显式传参可覆盖。
 - **报告**：基于 `transcript/` 与 `manifest.json` 撰写，严格遵循 `references/report-template.md` 固定模板；报告用图取 `covers/` 与 `frames/` 的真实素材。
