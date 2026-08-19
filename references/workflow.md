@@ -53,7 +53,7 @@
 
 1. `analyze.py`：统一编排音频转写、自适应抽帧、BGM 与逐帧 OCR，并把阶段状态写入运行日志。
 2. `transcribe.py`：直接读取抓取 JSON 的 `music_download_url`，下载/复用音频后生成逐字稿；低置信度写入 `needs_visual_review=true`。
-3. `extract_frames.py` + `analyze_frames.py`：基础 1 FPS、镜头突变补帧、低置信度视频 5 FPS；输出每帧时间戳、变化分数、亮度、清晰度和 OCR 字幕。Tesseract 不存在时明确写 `ocr_status=unavailable`，不伪造字幕。
+3. `extract_frames.py` + `analyze_frames.py`：每视频最低 12 个覆盖点，前三秒 3 FPS、镜头突变补帧、低置信度 5 FPS；输出每帧时间戳、画风、HSV 色彩/色温/对比度、视觉重心/构图、场景候选、OCR 字幕区域/覆盖率和产品露出候选，并聚合 `visual-summary.json`。场景与产品只输出启发式候选，必须复核；Tesseract 不存在时明确写 `ocr_status=unavailable`。
 4. `transcribe_bgm.py`：直接读取抓取 JSON 的音乐 URL并归档；不从 MP4 分离音频，缺源非零退出。
 5. `bgm_cross.py`：BGM×互动交叉 → `bgm/<account>/_cross.json`。
 5. （如需评论区）`comments.py`：`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N → `video-analysis/<account>/comments.json`
@@ -82,7 +82,7 @@ py -3 <skill>\tools\runtime.py run --tool report_html.py --root <root> --account
 
 按 `references/decompose-methodology.md` 补齐数据链：
 
-1. `decompose_prep.py`：组装每视频全维度档案中控 → `decompose/<account>/video_profiles.{json,md}`（标题/时长/时间/互动/口播/帧路径/BGM/评论）
+1. `decompose_prep.py`：组装每视频全维度档案中控 → `decompose/<account>/video_profiles.{json,md}`（标题/互动/口播/BGM/评论/关键帧，以及 `visual-summary.json` 的画风、色彩、构图、场景、字幕和产品露出候选）
 2. 全量每条第 11 节标准化标签 → `decompose/<account>/tags.json`
 3. 爆款 TOP + 典型全套 11 节深拆（配真实关键帧）
 

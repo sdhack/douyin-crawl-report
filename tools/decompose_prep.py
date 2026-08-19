@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """组装"每视频全维度档案"，供单视频逆向拆解 + 全量标准化标签 + 账号总结取数。
 
-将 manifest + 口播转写 + BGM 归档 + 帧(1fps) + 评论聚合 合成每视频一份紧凑档案：
+将 manifest + 口播转写 + BGM + 自适应帧/视觉摘要 + 评论合成每视频一份紧凑档案：
   <root>/decompose/<account>/video_profiles.json  (机器可读，供脚本/打标)
   <root>/decompose/<account>/video_profiles.md   (紧凑可读，供 LLM 快速浏览)
 
@@ -70,6 +70,12 @@ def main():
         full = "".join((s.get("text") or "").strip() for s in segs) or t.get("text") or ""
         fdir = os.path.join(root, "video-analysis", acct, "frames", aid)
         kf = key_frames(fdir) if os.path.isdir(fdir) else []
+        image_count = len(glob.glob(os.path.join(fdir, "*.jpg"))) if os.path.isdir(fdir) else 0
+        visual_path = os.path.join(fdir, "visual-summary.json")
+        try:
+            visual = json.load(open(visual_path, encoding="utf-8")) if os.path.isfile(visual_path) else None
+        except Exception:
+            visual = None
         cm = comments.get(aid)
         has_com = bool(cm and isinstance(cm, dict) and cm.get("comments"))
         if has_com:
@@ -83,15 +89,16 @@ def main():
             "comment_count": r.get("comments", 0),  # 该视频的评论总数（互动指标）
             "collects": r.get("collects", 0),
             "shares": r.get("shares", 0),
-            "duration_sec": round(t.get("duration") or b.get("duration_sec") or (len(os.listdir(fdir)) if os.path.isdir(fdir) else 0), 1),
+            "duration_sec": round(t.get("duration") or b.get("duration_sec") or image_count, 1),
             "transcript": full,
             "bgm_level": b.get("bgm_level", "?"),
             "mood": b.get("mood", "?"),
             "vocal": b.get("vocal", "?"),
             "bgm_text": b.get("bgm_text", ""),
             "frames_dir": fdir.replace("\\", "/").split(root.replace("\\", "/"))[-1].lstrip("/"),
-            "frame_count": len(os.listdir(fdir)) if os.path.isdir(fdir) else 0,
+            "frame_count": image_count,
             "key_frames": kf,
+            "visual_analysis": visual,
             "comments": (cm.get("comments") if has_com else None),  # 抓到的评论数组（无则 None）
             "comment_n": (cm.get("n") if has_com else 0),
         }
@@ -108,6 +115,9 @@ def main():
         lines.append(f"## [{v['rank']}] {v['aweme_id']}｜{v['create_time']}｜{v['likes']}赞/{v['collects']}藏/{v['shares']}享/评论{v['comment_count']}(抓{v['comment_n']})｜{v['duration_sec']}s｜BGM:{v['bgm_level']}/{v['mood']}")
         lines.append(f"- 标题：{v['title']}")
         lines.append(f"- 口播：{v['transcript'][:200] or '(无口播)'}")
+        if v["visual_analysis"]:
+            va = v["visual_analysis"]
+            lines.append(f"- 视觉：{va.get('visual_style')}｜{va.get('color', {}).get('temperature')}｜构图 {va.get('composition', {}).get('dominant')}｜场景 {va.get('scene', {}).get('dominant_candidate')}（候选待复核）")
         if v["comment_n"]:
             top3 = " / ".join((c["content"][:30]) for c in v["comments"][:3])
             lines.append(f"- 高赞评论：{top3}")
