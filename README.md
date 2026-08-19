@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.4.7-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.4.8-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -60,8 +60,8 @@ flowchart LR
 | 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，只跑增量不重复劳动 |
 | 下载 | `download.py` | 多线程并行，并发按机器自适应 |
 | 抽帧 | `extract_frames.py` | PyAV 1fps，**多进程并行 3.5× 提速** |
-| 口播转写 | `transcribe.py` | faster-whisper large-v3，**GPU 自动择优**，`--map` 术语纠错订正专业词误识 |
-| BGM 分析 | `transcribe_bgm.py` | 能量包络判强度 + 情绪启发式 + ×互动交叉揭示「该配的配到位」杠杆 |
+| 口播转写 | `transcribe.py` | 直接复用抓取 JSON 的音乐音频 URL；低置信度标记后再结合画面字幕核验 |
+| BGM 分析 | `transcribe_bgm.py` | 复用同一音频缓存做能量包络与情绪分析，不再从 MP4 分离音频 |
 | 评论洞察 | `crawl.py` → `comments.py` | 批量补抓评论，按赞聚合截断，进档案做需求洞察 |
 | 单视频拆解 | `decompose_prep.py` | 标题/时长/时间/互动/口播/帧/BGM/评论全维度档案 + 18 字段标准化标签 |
 | 账号聚合 | `account_metrics.py` | 自动产出 **发布节奏 · 互动交叉聚类 · 话题策略 + 高赞评论** 三维度，博主总结必吃 |

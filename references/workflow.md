@@ -52,8 +52,8 @@
 ## 阶段 3：内容分析
 
 1. `extract_frames.py`：PyAV 1fps 抽帧（绕开精简版 ffmpeg 无图片编码器）→ `video-analysis/<account>/frames/<aweme_id>/*.jpg`（多进程并行，默认 min(CPU核,4) 且受可用内存约束）
-2. `transcribe.py`：口播逐字稿 → `transcript/<account>/{aweme_id}.txt|.json`（GPU 自动择优 float16≈快 10x，断点续传；`--map <term_map.json>` 订正专业名词误识，{误词:正词}）
-3. `transcribe_bgm.py`：BGM 归档 → `bgm/<account>/{aweme_id}.json + _manifest.json`（bgm_level none/light/full · vocal speech/singing/none · mood · 歌词线索；**模型固定 large-v3**，与口播一致已缓存免联网）
+2. `transcribe.py`：直接读取抓取 JSON 的 `music_download_url`，下载/复用 `bgm/<account>/audio/` 后生成口播逐字稿 → `transcript/<account>/{aweme_id}.txt|.json`；不从 MP4 分离音频。低置信度时写入 `needs_visual_review=true`，再结合抽帧字幕核验；缺源直接失败，不回退。
+3. `transcribe_bgm.py`：直接读取抓取 JSON 的 `music_download_url`（manifest 的 `music_url`），下载并缓存到 `bgm/<account>/audio/` 后归档 → `bgm/<account>/{aweme_id}.json + _manifest.json`；**不从 MP4 分离音频，缺源不回退并以非零退出**（模型固定 large-v3，与口播一致已缓存免联网）。
 4. `bgm_cross.py`：BGM×互动交叉 → `bgm/<account>/_cross.json`（by_level/by_mood/by_vocal 组内 n/pct/均赞/均藏/均享 + 爆款明细 + 轻BGM vs 纯口播倍数）
 5. （如需评论区）`comments.py`：`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N → `video-analysis/<account>/comments.json`
 

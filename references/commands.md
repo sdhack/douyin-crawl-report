@@ -86,8 +86,8 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
 | `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
 | `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--workers 4]` | PyAV 抽帧（多进程并行，默认 min(CPU核,4)） |
-| `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 口播转写（GPU 择优 + 断点续传；`--map` 术语纠错订正误识） |
-| `tools/transcribe_bgm.py` | `python tools/transcribe_bgm.py --root <root> --account <slug> [--workers 2] [--device auto] [--compute auto]` | BGM 归档（风格/mood/歌词线索，**模型固定 large-v3**，与口播一致免联网）→ `<root>/bgm/<account>/` |
+| `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 从 JSON 的 `music_download_url` 下载/复用音频后转写，不从 MP4 分离；`needs_visual_review=true` 时结合画面字幕核验 |
+| `tools/transcribe_bgm.py` | `python tools/transcribe_bgm.py --root <root> --account <slug> [--workers 2] [--device auto] [--compute auto]` | 读取 JSON 的 `music_download_url` 直下并分析（不从 MP4 分离，缺源失败）→ `<root>/bgm/<account>/audio/` 与归档 JSON |
 | `tools/bgm_cross.py` | `python tools/bgm_cross.py --root <root> --account <slug> [--top 10]` | BGM×互动交叉（按 bgm_level/mood/vocal 分组算均赞/均藏/均享 + 爆款明细）→ `<root>/bgm/<account>/_cross.json` |
 | `tools/comments.py` | `python tools/comments.py --root <root> --account <slug> [--max 100]` | 评论聚合（`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N）→ `<root>/video-analysis/<account>/comments.json` |
 | `tools/decompose_prep.py` | `python tools/decompose_prep.py --root <root> --account <slug>` | 组装每视频全维度档案（标题/时长/时间/互动/口播/帧路径/BGM/评论）→ `decompose/<account>/video_profiles.{json,md}` |

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""BGM 归档（风格 + 文案参考）：faster-whisper large-v3 识别音频 + PyAV 能量包络启发式。
+"""BGM 归档：直接使用抓取 JSON 中的 music_download_url。
 
 固定使用 large-v3 模型（与口播转写一致，模型已缓存到项目 models_cache，免联网下载）。
 
@@ -13,14 +13,16 @@
 
 用法: python tools/transcribe_bgm.py --root <工作根> --account <slug>
       [--device auto] [--compute auto] [--workers N]
-输出: <root>/bgm/<account>/{aweme_id}.json + <root>/bgm/<account>/_manifest.json
+输入: <root>/video-analysis/<account>/manifest.json 的 music_url 字段
+输出: <root>/bgm/<account>/{aweme_id}.json + audio/{aweme_id}.mp3 + _manifest.json
 依赖: faster-whisper, av, numpy; GPU 需 nvidia-cublas-cu12（脚本自动定位）
 """
-import argparse, os, sys, time, glob, json
+import argparse, os, sys, time, json
 import concurrent.futures
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe  # noqa: E402
+from audio_source import cached_audio, manifest_items  # noqa: E402
 
 try:
     import numpy as np
@@ -42,12 +44,12 @@ def find_cublas():
                 return
 
 
-def _decoded(mp4):
+def _decoded_audio(path):
     try:
         import av
     except Exception:
         sys.exit("[ERR] 需 av：分析运行库未装，先 pip install av")
-    container = av.open(mp4)
+    container = av.open(path)
     stream = next((s for s in container.streams if s.type == "audio"), None)
     if stream is None:
         container.close()
@@ -146,19 +148,20 @@ def main():
         ctranslate2 = None
     has_cuda = bool(ctranslate2 is not None and ctranslate2.get_cuda_device_count() > 0)
 
-    vd = os.path.join(a.root, "videos", a.account)
     od = os.path.join(a.root, "bgm", a.account)
+    audio_dir = os.path.join(od, "audio")
     os.makedirs(od, exist_ok=True)
-    mp4s = sorted(glob.glob(os.path.join(vd, "*.mp4")))
-    if not mp4s:
-        print(f"[warn] 未找到视频: {vd}，无 BGM 可分析")
-        return
+    os.makedirs(audio_dir, exist_ok=True)
+    try:
+        items = manifest_items(a.root, a.account)
+    except Exception as e:
+        sys.exit(f"[ERR] {e}")
 
     def done(aid):
         return os.path.exists(os.path.join(od, aid + ".json"))
 
-    if all(done(os.path.splitext(os.path.basename(m))[0]) for m in mp4s):
-        print(f"[skip-all] {len(mp4s)} 个 BGM 产物均已产成，跳过 | {probe.snapshot(has_cuda)}")
+    if all(done(aid) for aid, _ in items):
+        print(f"[skip-all] {len(items)} 个 BGM 产物均已产成，跳过 | {probe.snapshot(has_cuda)}")
         return
 
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
@@ -169,16 +172,19 @@ def main():
     from faster_whisper import WhisperModel
     model = WhisperModel(a.model, device=device, compute_type=compute)
 
-    def one(mp4):
-        aid = os.path.splitext(os.path.basename(mp4))[0]
+    def one(item):
+        aid, url = item
         if done(aid):
             return aid, "skip"
         t0 = time.time()
         try:
-            x = _decoded(mp4)
+            audio_path = cached_audio(a.root, a.account, aid, url)
+            x = _decoded_audio(audio_path)
+            if x is None:
+                raise RuntimeError("audio decode failed")
             txt, avg = "", None
             try:
-                segs, info = model.transcribe(mp4, language=None, vad_filter=False,
+                segs, info = model.transcribe(audio_path, language=None, vad_filter=False,
                                               beam_size=5, condition_on_previous_text=False)
                 segs = list(segs)
                 txt = "".join(s.text.strip() for s in segs)
@@ -187,7 +193,8 @@ def main():
                 txt, avg = "", None
             meta = classify(x, txt, avg)
             meta.update({"aweme_id": aid, "duration_sec": round((len(x) / SR) if x is not None else 0, 1),
-                         "bgm_text": txt[:200], "lang": "zh-hint"})
+                         "bgm_text": txt[:200], "lang": "zh-hint", "source": "music_download_url",
+                         "source_status": "ok", "audio_path": os.path.relpath(audio_path, od).replace(os.sep, "/")})
             jp = os.path.join(od, aid + ".json")
             with open(jp, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -195,20 +202,20 @@ def main():
         except Exception as e:
             return aid, f"ERR {str(e)[:90]}"
 
-    print(f"[start] {len(mp4s)} videos -> {od}")
+    print(f"[start] {len(items)} music URLs -> {od}")
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
-        futs = {ex.submit(one, m): m for m in mp4s}
+        futs = {ex.submit(one, item): item for item in items}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()
             results.append(note)
-            print(f"  [{i}/{len(mp4s)}] {aid}: {note}")
+            print(f"  [{i}/{len(items)}] {aid}: {note}")
 
     # 聚合 manifest
     agg = {"by_bgm": {}, "by_mood": {}, "by_vocal": {}, "n": len(results)}
     records = []
-    for m in mp4s:
-        jp = os.path.join(od, os.path.splitext(os.path.basename(m))[0] + ".json")
+    for aid, _ in items:
+        jp = os.path.join(od, aid + ".json")
         if os.path.exists(jp):
             records.append(json.load(open(jp, encoding="utf-8")))
     for r in records:

@@ -27,7 +27,9 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 ### 提速（Speed）
 - **抓取**：抓取异常/漏抓时**优先修 MediaCrawler 自身**（签名参数、分页参数、登录态），核验真实视频数，**不切浏览器兜底**（历史上曾用浏览器内 fetch 直连 API 临时救急，已弃用——其与 MediaCrawler 抓取栈脱节，易再踩坑且违背"修根因"原则）。
 - **管线断点续传**：下载/抽帧/转写均按产出自动跳过已完成项，换新数据只处理增量（实测 162 条中仅重跑新增 105 条）。
+- **BGM 音源直用抓取 JSON**：`transcribe_bgm.py` 从 `video-analysis/<account>/manifest.json` 的 `music_url`（抓取字段 `music_download_url`）下载到本次运行的 `bgm/<account>/audio/` 后分析，**不再从 MP4 分离音频**；缺失或下载/解码失败直接报错退出，不回退。
 - **转写同模型复用**：口播与 BGM 统一用 faster-whisper **large-v3**，BGM 复用口播已缓存的同一模型，**免二次联网下载**。GPU 默认 float16，不支持的卡自动降级 `int8_float32`（实测 RTF 0.27–0.30，仍远快于 CPU int8 的 1.61，约 5.6×）。
+- **音频直连转写**：口播转写直接读取抓取 JSON 的 `music_download_url` 并复用本地音频缓存，不从 MP4 分离；缺源直接失败。低置信度结果标记 `needs_visual_review`，再结合抽帧字幕核验，不把画面核验伪装成转写成功。
 - **阶段并行**：下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
 
 ### 提质（Quality）

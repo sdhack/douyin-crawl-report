@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
-"""口播转写：faster-whisper，GPU 优先（float16）多 worker 并行 + 断点续传。
+"""口播转写：直接下载并使用抓取 JSON 中的 music_download_url。
 - CPU/GPU 自动择优：有 CUDA 用 cuda/float16（约快 10x），否则 cpu/int8。
 - 全部产物已存在时跳过模型加载（省冷启动约 5s）。
 - 可选术语纠错映射 --map <json>：{误词: 正词}，转写后自动订正专业名词误识（提质）。
 用法: python tools/transcribe.py --root <工作根> --account <slug>
       [--model large-v3] [--device auto] [--compute auto] [--workers N] [--map <term_map.json>]
 依赖: pip 安装 faster-whisper, ctranslate2; GPU 需 nvidia-cublas-cu12（脚本自动定位并加入 PATH）
+输入：`video-analysis/<account>/manifest.json` 的 music_url，缓存至 `bgm/<account>/audio/`。
+不从 MP4 分离音频；低置信度结果标记 needs_visual_review，供后续结合画面字幕核验。
 输出: <root>/transcript/<account>/{aweme_id}.txt | .json
 """
 import argparse, os, sys, time, glob, json
@@ -13,6 +15,7 @@ import concurrent.futures
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe  # noqa: E402
+from audio_source import cached_audio, manifest_items  # noqa: E402
 
 
 def find_cublas():
@@ -61,10 +64,14 @@ def main():
     find_cublas()
     import ctranslate2
 
-    vd = os.path.join(a.root, "videos", a.account)
+    audio_dir = os.path.join(a.root, "bgm", a.account, "audio")
     od = os.path.join(a.root, "transcript", a.account)
     os.makedirs(od, exist_ok=True)
-    mp4s = sorted(glob.glob(os.path.join(vd, "*.mp4")))
+    os.makedirs(audio_dir, exist_ok=True)
+    try:
+        inputs = manifest_items(a.root, a.account)
+    except Exception as e:
+        sys.exit(f"[ERR] {e}")
 
     def prod_exists(aid):
         return os.path.exists(os.path.join(od, aid + ".txt")) and os.path.exists(os.path.join(od, aid + ".json"))
@@ -88,23 +95,23 @@ def main():
         except Exception:
             return False
 
-    def prod_missing(mp4):
-        return not prod_exists(os.path.splitext(os.path.basename(mp4))[0])
+    def prod_missing(item):
+        return not prod_exists(item[0])
 
     has_cuda = ctranslate2.get_cuda_device_count() > 0
 
     # 快检：全部已产成 → 不解码模型；有 --map 仅对已有产物就地订正文本层
-    if all(not prod_missing(m) for m in mp4s):
+    if all(not prod_missing(m) for m in inputs):
         if terms:
-            n_fix = sum(rewrite_corrected(os.path.join(od, os.path.splitext(os.path.basename(m))[0] + ".txt"),
-                                          os.path.join(od, os.path.splitext(os.path.basename(m))[0] + ".json"),
-                                          terms) for m in mp4s)
-            print(f"[skip-all] {len(mp4s)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}")
+            n_fix = sum(rewrite_corrected(os.path.join(od, m[0] + ".txt"),
+                                          os.path.join(od, m[0] + ".json"),
+                                          terms) for m in inputs)
+            print(f"[skip-all] {len(inputs)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}")
         else:
-            print(f"[skip-all] {len(mp4s)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}")
+            print(f"[skip-all] {len(inputs)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}")
         return
 
-    pending = [m for m in mp4s if prod_missing(m)]
+    pending = [m for m in inputs if prod_missing(m)]
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
     compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
     print(f"[env] cuda_count={has_cuda}")
@@ -116,21 +123,23 @@ def main():
     if terms:
         print(f"[map] 术语纠错映射已启用：{len(terms)} 项")
 
-    def one(mp4):
-        aid = os.path.splitext(os.path.basename(mp4))[0]
+    def one(item):
+        aid, url = item
         tp = os.path.join(od, aid + ".txt")
         jp = os.path.join(od, aid + ".json")
         t0 = time.time()
         try:
+            audio_path = cached_audio(a.root, a.account, aid, url)
             segs, info = model.transcribe(
-                mp4, language="zh", beam_size=5, vad_filter=True,
+                audio_path, language="zh", beam_size=5, vad_filter=True,
                 initial_prompt="以下是一段抖音口播视频的普通话转写，请准确识别产品专业名词、数字与品牌名。",
             )
-            lines, sl = [], []
+            lines, sl, probs = [], [], []
             for s in segs:
                 t = correct(s.text.strip(), terms)
                 lines.append(f"[{s.start:06.2f} - {s.end:06.2f}] {t}")
                 sl.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": t})
+                probs.append(float(s.avg_logprob))
             with open(tp, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
             with open(jp, "w", encoding="utf-8") as f:
@@ -138,6 +147,11 @@ def main():
                     "aweme_id": aid, "language": info.language,
                     "language_probability": round(float(info.language_probability), 3),
                     "duration": round(float(info.duration), 2), "segments": sl,
+                    "source": "music_download_url",
+                    "audio_path": os.path.relpath(audio_path, a.root).replace(os.sep, "/"),
+                    "avg_logprob": round(sum(probs) / len(probs), 3) if probs else None,
+                    "needs_visual_review": bool(float(info.language_probability) < 0.80 or not sl or
+                                                (probs and sum(probs) / len(probs) < -0.8)),
                 }, f, ensure_ascii=False, indent=2)
             return aid, f"ok {len(sl)}segs {time.time()-t0:.1f}s"
         except Exception as e:
@@ -146,7 +160,7 @@ def main():
     print(f"[start] {len(pending)} videos -> {od} ({device}, {w} workers)")
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
-        futs = {ex.submit(one, mp): mp for mp in pending}
+        futs = {ex.submit(one, item): item for item in pending}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()
             results.append(note)
