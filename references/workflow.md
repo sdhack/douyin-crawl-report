@@ -1,12 +1,11 @@
 # 完整流程细节
 
-从抖音账号 URL 到报告生成的端到端流程，基于「南山鹿」「锋味派」「诺特兰德」等对标分析项目的实战经验。本技能自带 `tools/` 一键流水线（见文末附录），统一下述命令均可经 `py -3 <skill>/tools/runtime.py run --tool <x>.py ...` 走项目运行库解释器执行。
+从抖音账号 URL 到报告生成的端到端流程，基于茶类/食品/营养保健等多品类对标分析项目的实战经验。本技能自带 `tools/` 一键流水线（见文末附录），统一下述命令均可经 `py -3 <skill>/tools/runtime.py run --tool <x>.py ...` 走项目运行库解释器执行。
 
 ## 环境与登录准备
 
 ```powershell
-# 1. Node.js 加入 PATH（MediaCrawler 抖音 execjs 签名必需）
-$env:PATH = "C:\Users\Administrator\AppData\Local\Programs\node-v24.19.0-win-x64;$env:PATH"
+# 1. Node.js 需在 PATH（MediaCrawler 抖音 execjs 签名必需；未安装/未入 PATH 时先装或临时 $env:PATH 前置其安装目录）
 
 # 2. 登录态：首次 qrcode 扫码；后续可复用登录态（cookie/CDP 复用 Edge/Chrome 登录）
 #    登录态缓存于 MediaCrawler config/，过期则重新扫码
@@ -58,22 +57,22 @@ $env:PATH = "C:\Users\Administrator\AppData\Local\Programs\node-v24.19.0-win-x64
 
 **提速要点**：下载/抽帧/转写均按产物存在性跳过已完成项，换新数据只跑增量；下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
 
-## 阶段 4：报告生成（render_report.py，直接出 HTML）
+## 阶段 4：报告生成（report_html.py，v2 固定骨架直出 HTML）
 
-对标分析报告**必须遵循 `references/report-template.md` 固定模板**（文档头→引言→数据样本构成→关键指标→核心结论→01~07 章节→附言）。HTML **一律用技能内建 `tools/render_report.py`** 一步渲染为自包含单文件，不落 `.md` 中间稿：
+对标分析报告走**数据驱动固定骨架**：骨架/视觉/图标固化在 `tools/report_html.py`，**全部统计数字由工具实时计算**，AI 只写定性 `narrative.json`（槽位 schema 见 `references/report-template.md`）：
 
 ```powershell
-# 推荐：内容完成后直接经 --stdin 渲染，工作区只留 .html
-Get-Content 分析内容.md -Raw | py -3 <skill>\tools\runtime.py run --tool render_report.py --stdin --out "{账号}-对标分析报告.html" [--key 'DOUYIN BENCHMARK'] [--no-toc]
-# 或先落一份 .md 再渲染
-py -3 <skill>\tools\runtime.py run --tool render_report.py --source 对标分析报告.md [--out 对标分析报告.html] [--inline]
+# 1) AI 按 report-template.md v2 槽位撰写（定性结论/口号/金句/方案；统计数字一律留空由工具算）
+#    落 <root>/video-analysis/<account>/narrative.json
+# 2) 一步生成 + 内置结构自检（标签平衡/锚点；失败即退出非零码）
+py -3 <skill>\tools\runtime.py run --tool report_html.py --root <root> --account <slug> `
+    --title "抖音{品类}达人对标分析报告" --subtitle "「{账号}」账号拆解与差异化起号方案" `
+    --narrative <root>\video-analysis\<slug>\narrative.json --out "{账号}-对标分析报告.html"
 ```
 
-- `--inline`：封面/抽帧内联 base64，保持单文件；`--no-toc`：去掉侧栏目录（单栏+顶部品牌横幅，博主全量视频总结默认用它）；`--title/--tagline` 可覆盖侧栏标题与副题。
-- 渲染对齐 report-template：目录只收主章节 `## 01~07`、`## N *单位*` 数据样本卡、章内 `# 数字` 居中大数字卡、`>` 五类收治区自动配色、嵌套列表→内容支柱树。
-- **每次渲染默认从内置 8 套视觉主题中随机轮换**（内容骨架恒定、视觉不重样），用 `--theme <name>` 指定、`--theme-seed <N>` 复现。
-
-**提质要点**：报告硬编码数字（总赞/均赞/分类条数/爆款榜/时间范围）必须与最新数据集一致；换新数据后逐段核对封面、概览、趋势、分类、爆款拆解、对标基准、数据来源，避免沿用旧样本。
+- 封面/关键帧自动内联（真实素材、超 400KB 跳过、缺源如实标注）；评论/BGM/关键帧/逐字稿任一缺源时对应章节自动省略并在附言声明。
+- `--top-n`(默认10) 控爆款榜行数、`--frames-n`(默认6) 控关键帧切片数。
+- **`render_report.py` 不再渲染对标报告**（已收口防双路径），仅用于阶段 4c 博主全量视频总结。
 
 ## 阶段 4b：单视频逆向拆解 + 账号总结
 
@@ -99,7 +98,7 @@ py -3 <skill>\tools\runtime.py run --tool render_report.py --source 对标分析
 
 ## 附录：技能内建一键流水线（tools/）
 
-统一的工作目录结构（`<root>` 为任意工作根，`<account>` 为账号 slug 如 `nutelande`）：
+统一的工作目录结构（`<root>` 为任意工作根，`<account>` 为账号 slug，如 `myaccount`）：
 
 ```
 <root>/crawl_<account>/                    crawl 抓取产物（原始 jsonl + 去重 + crawl.log）
@@ -107,6 +106,7 @@ py -3 <skill>\tools\runtime.py run --tool render_report.py --source 对标分析
 <root>/video-analysis/<account>/manifest.json   process 下载清单（互动排序）
 <root>/video-analysis/<account>/frames/<aid>/*.jpg  extract_frames 抽帧
 <root>/video-analysis/<account>/comments.json  comments 评论聚合（每视频按赞截断 top N）
+<root>/video-analysis/<account>/narrative.json report_html 定性槽位（AI 撰写，统计数字留空）
 <root>/videos/<account>/*.mp4              download 视频
 <root>/covers/<account>/*.jpg              download 封面
 <root>/transcript/<account>/*.txt|.json    transcribe 口播转写
@@ -120,14 +120,14 @@ py -3 <skill>\tools\runtime.py run --tool render_report.py --source 对标分析
 完整命令链（`python` 一律指运行库解释器，或写成 `py -3 <skill>\tools\runtime.py run --tool <x.py>`）：
 
 ```powershell
+# 0 给 MediaCrawler 打断点续传补丁（一次性；路径缺省自动探测）
+python tools/patch_mediacrawler.py [<MediaCrawler douyin/client.py>]
+
 # 1 抓取（--dry-run 先预览命令）
 python tools/crawl.py --root <root> --account <account> --mode creator --target "<sec_uid>" [--max N] [--lt cookie --cookies "…"] [--dry-run]
 python tools/crawl.py --root <root> --account <account> --mode detail --target "<aweme_id>"
 python tools/crawl.py --root <root> --account <account> --mode search --target "关键词"
 #    评论补抓：--mode detail --get-comment --target "<id1>,<id2>,..." --max 100 --speed normal --sleep-min 3 --sleep-max 8 --retry-fail 2
-
-# 0 给 MediaCrawler 打断点续传补丁（一次性；路径缺省自动探测）
-python tools/patch_mediacrawler.py [<MediaCrawler douyin/client.py>]
 
 # 2 去重 + 生成清单（--json 缺省取最新 jsonl）
 python tools/process.py --root <root> --account <account>
@@ -145,8 +145,8 @@ python tools/bgm_cross.py --root <root> --account <account> [--top 10]
 # 3e 评论聚合（前提：先把评论补抓落 detail_comments_*.jsonl）
 python tools/comments.py --root <root> --account <account> [--max 100]
 
-# 4 报告生成（对标 → 干净卡片式 HTML，直接出 html 不落 md）
-Get-Content 分析内容.md -Raw | python tools/render_report.py --stdin --out 对标分析报告.html [--key 'DOUYIN BENCHMARK'] [--no-toc]
+# 4 报告生成（对标 → v2 固定骨架 HTML；先写 narrative.json 再一步生成，数字全自动）
+py -3 <skill>\tools\runtime.py run --tool report_html.py --root <root> --account <account> --title "抖音{品类}达人对标分析报告" --narrative <root>\video-analysis\<account>\narrative.json --out "{账号}-对标分析报告.html"
 
 # 4b 单视频逆向拆解（见 decompose-methodology.md）
 python tools/decompose_prep.py --root <root> --account <account>
@@ -162,5 +162,5 @@ Get-Content 博主全量视频总结.md -Raw | python tools/render_report.py --s
 - **断点续传**：download / extract_frames / transcribe 均按产物已存在自动跳过，换新数据重跑即增量补齐。
 - **CPU vs GPU 择优**：transcribe 用 `ctranslate2.get_cuda_device_count()` 探测，`--device`/`--compute` 默认 `auto` 自动选 cuda/float16 或 cpu/int8。
 - **并发自适应（推荐）**：download/extract_frames/transcribe 的并发缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无自动调度，显式传参可覆盖。
-- **报告**：基于 `transcript/`（话术）、`manifest.json`（互动）、`bgm/_cross.json`（BGM×互动实证）撰写，严格遵循 `references/report-template.md`；用图取 `covers/` 与 `frames/` 真实素材，`--inline` 内联 base64 保单文件。
+- **报告**：定性内容取 `transcript/`（话术）与 `comments.json`（评论原声）撰写 narrative.json；统计数字、图（`covers/`+`frames/` 真实素材）由 `report_html.py` 全自动计算与内联，禁止手写统计数字。
 - **博主总结（阶段4b2 前置必跑）**：做账号级总结前必须先跑 `account_metrics.py` 生成 `_metrics.json`。三地映射：**发布节奏→二·选题地图(时间轴)**、**互动交叉聚类→七·爆款VS普通(分型)**、**话题策略+高赞评论→六·用户需求地图(评论区实证)**。

@@ -36,7 +36,7 @@ def download(url, path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
     ap.add_argument("--threads", type=int, default=None,
                     help="并发下载线程数（缺省按机器配置调度 2..6）")
     a = ap.parse_args()

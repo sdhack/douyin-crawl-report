@@ -208,7 +208,7 @@ def filter_dedup(raw, out, keyword):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, help="工作根目录（产物将落在 <root>/crawl_<account>）")
-    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
     ap.add_argument("--mode", choices=_MODES, required=True, help="creator=账号全量 / detail=单条 / search=关键词")
     ap.add_argument("--target", required=True, help="creator: sec_uid；detail: aweme_id/URL；search: 关键词")
     ap.add_argument("--max", type=int, default=100, help="最大抓取数 (crawler_max_notes_count)")

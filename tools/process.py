@@ -15,7 +15,7 @@ def latest_jsonl(root):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, help="工作根目录（含 data/ 的目录）")
-    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
     ap.add_argument("--json", default=None, help="去重前原始 jsonl 路径")
     a = ap.parse_args()
 

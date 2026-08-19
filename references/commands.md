@@ -5,7 +5,7 @@
 运行库装在**项目目录 `<项目根>/.runtime/py`**，经全局指针 `~/.trae-cn/runtime-registry.json` 复用（换目录不重装环境、不装 C 盘）。统一前缀：
 
 ```bat
-set SKILL=C:\Users\Administrator\.trae-cn\skills\douyin-crawl-report
+set SKILL=%USERPROFILE%\.trae-cn\skills\douyin-crawl-report
 REM 打印运行库解释器 / 校验依赖+CUDA
 py -3 %SKILL%\tools\runtime.py py
 py -3 %SKILL%\tools\runtime.py doctor
@@ -20,7 +20,7 @@ py -3 %SKILL%\tools\runtime.py run --tool transcribe.py --root <工作根> --acc
 `tools/crawl.py` 是技能内建的 MediaCrawler **轻量调度封装**：自动解析 MediaCrawler 解释器/源码根（env > 全局指针 > cache）、拼接经校验的参数、断点续传、进度日志、并把产物落到项目目录（不占 C 盘）。MediaCrawler 本体保留在 `~/.cache/codex-mediacrawler/MediaCrawler`，不随技能复制。
 
 ```bat
-set SKILL=C:\Users\Administrator\.trae-cn\skills\douyin-crawl-report
+set SKILL=%USERPROFILE%\.trae-cn\skills\douyin-crawl-report
 REM 账号主页全量（--target 填 sec_uid）
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode creator --target "<sec_uid>" --max 90
 REM 单条视频 / 关键词搜索
@@ -92,7 +92,8 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `tools/comments.py` | `python tools/comments.py --root <root> --account <slug> [--max 100]` | 评论聚合（`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N）→ `<root>/video-analysis/<account>/comments.json` |
 | `tools/decompose_prep.py` | `python tools/decompose_prep.py --root <root> --account <slug>` | 组装每视频全维度档案（标题/时长/时间/互动/口播/帧路径/BGM/评论）→ `decompose/<account>/video_profiles.{json,md}` |
 | `tools/account_metrics.py` | `python tools/account_metrics.py --root <root> --account <slug>` | 从 `video_profiles.json` **自动聚合账号级关键维度**：**① 发布节奏**（首/末条日期、跨度、月均、峰值月份、相邻发布间隔中位，仅到日期无小时）、**② 互动交叉聚类**（收藏/评论/分享率中位整体结构 + 爆款型/收藏型/讨论型/分享转执型 Top5，账号自适应中位数+相对突出度阈值，长尾也命中）、**③ 话题策略 + 高赞评论**（#hashtag 词频+均赞 Top15 + 全账号高赞评论 Top20）→ `decompose/<account>/_metrics.json`，博主人总结必吃数据 |
-| `tools/render_report.py` | `python tools/render_report.py --source 对标分析报告.md` **或** `... | python tools/render_report.py --stdin --out 报告.html`（**直接出 html、不落 md 中间稿**）`[--key 'DOUYIN BENCHMARK'] [--no-toc] [--title …] [--tagline …] [--inline]` | 对标报告 md/内容 → **自包含单文件 HTML**，对齐 `report-template.md`：目录只收主章节、`## N *单位*` 数据样本卡、`# 数字` 居中大数字卡、`## 01~07` section、`>` 五类收治区自动配色、**嵌套列表 → 内容支柱树**、真实抽帧图 `--inline` 内联 base64（**唯一官方 HTML 渲染入口，禁止手工平铺**）；`--no-toc` 去掉侧栏目录、章节不再套卡片盒，改单栏+顶部品牌横幅的扁平版式（博主全量视频总结默认用它）；**每次渲染默认从内置 8 套视觉主题中随机挑一套（内容骨架恒定、视觉不重样），用 `--theme <name>` 指定、`--theme-seed <N>` 固定复现** |
+| `tools/report_html.py` | `python tools/report_html.py --root <root> --account <slug> --title "…" [--subtitle "…"] --narrative <narrative.json> --out 报告.html [--top-n 10] [--frames-n 6] [--img-cap-kb 400]` | **对标报告 v2 固定骨架生成器（唯一入口）**：统计数字全部实时计算、封面/关键帧自动内联、结构自检；narrative 槽位见 `references/report-template.md` |
+| `tools/render_report.py` | `python tools/render_report.py --source 总结.md` **或** `... \| python tools/render_report.py --stdin --out 报告.html`（直接出 html、不落 md 中间稿）`[--key 'CREATOR SUMMARY'] [--no-toc] [--title …] [--tagline …] [--inline] [--theme <name>] [--theme-seed <N>]` | **博主全量视频总结 / decompose 长文专用 md→HTML 渲染器**（自由排版+8 套主题随机轮换，`--theme-seed` 复现；`--no-toc` 单栏+品牌横幅；`--inline` 内联 base64）。**不再渲染对标报告**（对标一律走 report_html.py） |
 | `references/blogger-summary-prompt.md` | 账号级总结提示词（见该文件）：对全量 `tags.json`+`comments.json`+`video_profiles` 按 11 节「博主全量视频总结」分析→**直接经 `render_report.py --stdin --key 'CREATOR SUMMARY'` 出 html（不落 md）** | 账号内容增长模型 / 内容DNA / 机会挖掘的多维度总结报告 |
 
 **资源自适应调度（tools/probe.py）**：`download --threads`、`extract_frames --workers`、`transcribe --workers` 缺省按机器配置自动取值——`CPU 核数 + 内存占用率(可用GB) + GPU 有无`。GPU 存在→转写 worker 少（共享显存，宜 2）；无 GPU→CPU 用剩余核并切 int8 且按内存封顶；抽帧按 `min(核,4)` 且受可用内存约束防 OOM。显式传参可覆盖推荐值。
@@ -109,10 +110,11 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `<root>/bgm/<account>/*.json \| _manifest.json` | BGM 归档（bgm_level/vocal/mood/歌词线索）+ 聚合统计 |
 | `<root>/bgm/<account>/_cross.json` | BGM×互动交叉（bgm_cross.py：组间均赞/均藏/均享、爆款明细） |
 | `<root>/video-analysis/<account>/comments.json` | 评论聚合（comments.py：每视频按赞截断 top N） |
+| `<root>/video-analysis/<account>/narrative.json` | 对标报告定性槽位（AI 撰写，schema 见 report-template.md v2） |
 | `<root>/decompose/<account>/video_profiles.{json,md}` | 每视频全维度档案（decompose_prep.py，供拆解取数） |
 | `<root>/decompose/<account>/tags.json` | 全量标准化标签（单视频拆解第11节18字段，供账号聚合） |
 | `<root>/decompose/<account>/_metrics.json` | 账号级聚合（account_metrics.py：发布节奏 / 互动交叉聚类 / 话题策略 / 高赞评论Top20，博主总结必吃） |
 
-> **报告渲染**：对标报告按 `references/report-template.md` 固定模板撰写；HTML **一律用技能内建 `tools/render_report.py`** 渲染为**自包含单文件**（对齐模板结构；`--inline` 把抽帧/封面内联 base64、BGM 条形图用 CSS 变量 `var(--accent)` 调色，一处改色全篇跟随）。
+> **报告渲染分工（v2 收口，防双路径打架）**：**对标分析报告一律走 `tools/report_html.py`**（v2 固定骨架直出自包含单文件，统计数字实时计算、封面/关键帧自动内联、结构自检；定性槽位经 `--narrative` 注入，schema 见 `references/report-template.md`）。`render_report.py` 仅渲染**博主全量视频总结 / decompose 长文**（自由 md，`--inline` 把抽帧/封面内联 base64）。
 
 **tools/ 环境依赖**：`extract_frames` 需 `av`+`Pillow`；`transcribe` 需 `faster-whisper`+`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（解决 `cublas64_12.dll not found`，脚本自动把 bin 加入 PATH）。

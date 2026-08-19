@@ -45,7 +45,7 @@ def _worker(args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
     ap.add_argument("--fps", type=int, default=1, help="抽帧频率（帧/秒），精校抽帧默认 1")
     ap.add_argument("--workers", type=int, default=None,
                     help="并行进程数（缺省按机器配置自动调度 min(核,4) 且受可用内存约束）")

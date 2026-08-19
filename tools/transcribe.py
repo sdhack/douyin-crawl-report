@@ -49,7 +49,7 @@ def correct(text, terms):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--account", required=True, help="账号 slug，如 nutelande")
+    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
     ap.add_argument("--model", default="large-v3")
     ap.add_argument("--device", default="auto", help="auto/cuda/cpu")
     ap.add_argument("--compute", default="auto", help="auto/float16/int8/float32")

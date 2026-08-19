@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.2.0-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.3.0-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -26,8 +26,10 @@ flowchart LR
     F --> G
     E --> G
     G --> H["⑧ 账号聚合 account_metrics.py<br/>发布节奏 · 互动聚类 · 话题 + 高赞评论"]
-    H --> I["⑨ 报告 render_report.py<br/>固定骨架 · 8 套主题随机"]
+    H --> I["⑨ 对标报告 report_html.py<br/>v2 固定骨架 · 数据全自动 · 叙事分离"]
+    H --> J["⑩ 博主总结 render_report.py<br/>自由 md · 8 套主题随机"]
     I -.->|下一账号| A
+    J -.->|下一账号| A
 ```
 
 - 详细流程 → [`references/workflow.md`](./references/workflow.md)
@@ -63,7 +65,8 @@ flowchart LR
 | 评论洞察 | `crawl.py` → `comments.py` | 批量补抓评论，按赞聚合截断，进档案做需求洞察 |
 | 单视频拆解 | `decompose_prep.py` | 标题/时长/时间/互动/口播/帧/BGM/评论全维度档案 + 18 字段标准化标签 |
 | 账号聚合 | `account_metrics.py` | 自动产出 **发布节奏 · 互动交叉聚类 · 话题策略 + 高赞评论** 三维度，博主总结必吃 |
-| 报告 | `render_report.py` | **固定骨架**（模板恒定）· **8 套视觉主题随机轮换** · 自包含单文件 HTML · 内联真实抽帧 |
+| 对标报告 | `report_html.py` | **v2 固定骨架直出 HTML**（10 区结构 + 图标系统）：统计数字全部由工具从管线产物实时计算，AI 只写定性 `narrative.json`，封面/关键帧自动内联，内置结构自检 |
+| 博主总结 | `render_report.py` | 自由 md → 自包含 HTML 渲染器（8 套视觉主题随机轮换），用于账号级总结/decompose 长文，**不渲染对标报告** |
 
 ---
 
@@ -113,8 +116,10 @@ python tools/crawl.py --root <根> --account <slug> --mode detail --get-comment 
 python tools/comments.py --root <根> --account <slug>
 python tools/decompose_prep.py --root <根> --account <slug>
 python tools/account_metrics.py --root <根> --account <slug>
-# ④ 报告渲染（固定骨架 · 随机主题 · 自包含 HTML）
-python tools/render_report.py --source 对标分析报告.md --inline
+# ④ 对标报告（v2 固定骨架：先写定性 narrative.json，数字由工具全自动计算）
+python tools/report_html.py --root <根> --account <slug> --title "抖音{品类}达人对标分析报告" \
+    --narrative video-analysis/<slug>/narrative.json --out "{账号}-对标分析报告.html"
+#    博主总结/长文另用：python tools/render_report.py --source 总结.md --inline
 ```
 
 > `--threads / --workers / --device / --compute` 缺省**按机器配置自动调度**，显式传参可覆盖。
@@ -135,13 +140,19 @@ python tools/render_report.py --source 对标分析报告.md --inline
 
 ---
 
-## 🎨 报告：骨架恒定，视觉每次不同
+## 🎨 报告：数据与叙事分离（v2）
 
-对标报告严格遵循 `references/report-template.md` 的**固定骨架**（引言 → 数据样本 → 关键指标 → 核心结论 → 章节 01~07 → 附言），但每次渲染由 `render_report.py` 从内置 **8 套视觉主题**（暖橘墨画 / 青瓷 / 纸感素印 / 雾兰 / 绛紫 / 暗夜鎏金 / 苔绿 / 蔷薇沙）中**随机**挑选一套，实现「结构稳定、视觉常新」。
+对标报告由 **`tools/report_html.py`** 直出**固定骨架** HTML（数据构成 → 核心结论 → 对标方法 → 达人画像 → 内容矩阵 → 文案拆解 → 评论区实证 → BGM×互动 → 变现逻辑 → 起号方案 + 诚实口径附言）：
+
+- **全部统计数字由工具实时计算**（manifest / comments / BGM _cross / frames / covers），AI 不得手写——杜绝数据漂移与「自欺式验证」；
+- **AI 只写定性 `narrative.json`**（结论/口号/金句/方案，槽位 schema 见 [`references/report-template.md`](./references/report-template.md)）；
+- **封面/关键帧自动内联**真实素材（超限跳过、缺源如实标注），内置标签平衡/锚点**结构自检**；
+- 评论/BGM/关键帧/逐字稿任一缺源 → 对应章节自动省略并在附言声明，**禁止虚构**。
+
+`render_report.py` 仅用于**博主全量视频总结 / decompose 长文**（自由 md + 8 套视觉主题随机轮换，`--theme-seed` 复现）：
 
 ```bash
-python tools/render_report.py --source 报告.md --inline --theme celadon   # 指定主题
-python tools/render_report.py --source 报告.md --inline --theme-seed 7    # 固定种子复现
+python tools/render_report.py --source 博主总结.md --inline --theme-seed 7   # 固定种子复现
 ```
 
 ---
@@ -156,6 +167,7 @@ python tools/render_report.py --source 报告.md --inline --theme-seed 7    # �
 | 抽帧（多进程 4，1fps） | **28.7s → 8.3s**（3.5×），578 帧逐条一致 |
 | 术语纠错 `--map` | 「小包私立装→小包分粒装」txt/json 同步订正，零残留 |
 | 账号聚合 `account_metrics` | 877 天跨度 · 月均 5.4 · 间隔中位 3 天 · 四型 Top 各 5 全命中 |
+| 全量跑通（247 条账号，胶原肽类目） | 评论补抓 **4272 条 / 246 视频**；242 条 GPU 口播转写 **89 分钟**（int8_float32，RTF 0.27–0.30）；BGM 归档 VAD 防音乐幻觉循环；`report_html.py` 一步出 2.5MB 自包含报告（10 封面 + 6 关键帧内联，结构自检通过） |
 
 ---
 
@@ -177,7 +189,8 @@ douyin-crawl-report/
 │  ├─ comments.py            评论聚合（按赞截断去重）
 │  ├─ decompose_prep.py      全维度视频档案组装
 │  ├─ account_metrics.py     账号级聚合（发布节奏/互动聚类/话题+高赞评论）
-│  ├─ render_report.py       固定骨架报告渲染器（8 主题随机，自包含 HTML）
+│  ├─ report_html.py         对标报告 v2 固定骨架生成器（数据全自动 + narrative 槽位 + 结构自检）
+│  ├─ render_report.py       博主总结 md→HTML 渲染器（8 主题随机，自包含 HTML）
 │  └─ patch_mediacrawler.py  MediaCrawler 断点续传补丁
 ├─ references/               文档 + 固定报告模板 + 博主总结提示词
 │  ├─ workflow.md            全流程分阶段说明
@@ -195,8 +208,8 @@ douyin-crawl-report/
 
 ## 🛡 质量与合规
 
-- **固定报告模板**：对标报告严格遵循 `references/report-template.md`，只换数据不换骨架
-- **人工精校兜底**：大模型转写 ≠ 终稿，产品名/工艺/茶底等专业名词报告引用前人工校对口音误识
+- **固定报告模板**：对标报告由 `report_html.py` 按 v2 固定骨架直出，数据与叙事分离，只换数据不换骨架
+- **人工精校兜底**：大模型转写 ≠ 终稿，产品名/工艺/专业术语在报告引用前人工校对口音误识
 - **仅抓公开信息**：遵守抖音平台规则与法律边界，不做平台逆向、不做大规模恶意爬虫
 - **视觉必须真实**：报告用图取真实抽帧与封面，不用 AI 生成图冒充
 - **诚实口径**：报告标注样本构成、数据时间范围与「描述性相关、非因果」等边界

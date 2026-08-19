@@ -17,7 +17,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
    - **评论抓取**：`--get-comment` 默认关；对标拆解要做评论区分析时，用 `detail` 模式 + `--get-comment` 对全量 `aweme_id` 分批补抓评论（每次逗号分隔成批、`--max` 控每条视频上限），落 `<root>/crawl_<acct>/douyin/jsonl/detail_comments_*.jsonl`。评论 API 需登录态；追账期内登录态可直接复用（无需重复扫码）。**注意**：批处理循环用 python 脚本驱动（`subprocess`），勿用 `powershell -File` 拼中文路径（代码页会乱码导致整脚本早退）。
 2. **数据处理**：`process.py` 去重→manifest → `download.py` 下载视频/封面 → 图文切分。
 3. **内容分析**：`extract_frames.py` 视频抽帧（1fps）→ 真实视觉分析 → `transcribe_bgm.py` BGM 归档（风格/bgm强度/歌词线索，模型固定 large-v3）→ `bgm_cross.py` BGM×互动交叉统计（b组均值、爆款明细→`_cross.json`）→ 直播话术校对口音误识别 → 各维度统计。
-4. **报告生成**：撰写对标分析报告（账号/内容矩阵/文案/带货/直播/起号）。**内容必须遵循 `references/report-template.md` 的固定模板结构**（文档头→引言→数据样本构成→关键指标→核心结论→01~07 章节→附言），只替换占位数据、不改骨架。**HTML 渲染用技能内建 `tools/render_report.py` 一步渲染为自包含单文件**（干净卡片式，专项对齐 report-template：目录只收主章节、`## N *单位*` 数据样本卡、`# 大数字` 居中卡、`## 01~07` 章节 section、`>` 五类收治区自动着色、真实抽帧图 `--inline` 内联 base64）。**报告 HTML 一律经 `render_report.py` 直出：分析内容完成后直接经 `--stdin`（或 `--source`)一步渲染为 `{账号}-对标分析报告.html`，不落 `.md` 中间稿**；**每次渲染默认从内置 8 套视觉主题中随机轮换（内容骨架恒定不变、视觉不重样），可用 `--theme <name>` 指定、`--theme-seed <N>` 复现**（禁止手工平铺、禁止"又杂又乱"的长目录/杂元素堆积）。若用户要求视频级逆向拆解 / 账号级深度总结，按 `references/decompose-methodology.md` 补齐数据链（全量每条第11节标签 → `decompose/tags.json` → 爆款TOP+典型11节深拆），**并先跑 `tools/account_metrics.py` 自动聚合账号级维度（发布节奏 / 互动交叉聚类 / 话题策略+高赞评论 → `decompose/<account>/_metrics.json`，为博主总结必吃数据）**，再按 `references/blogger-summary-prompt.md` 的**博主全量视频总结提示词**对全部视频做账号级总结（定位/选题地图/Hook/内容结构/画面/用户需求/爆款对比/DNA/机会/最终输出），产出 Markdown 后同样经 `tools/render_report.py` 渲染为 HTML。
+4. **报告生成（v2 固定骨架，数据与叙事分离）**：对标报告用技能内建 **`tools/report_html.py`** 直出固定骨架 HTML——骨架/视觉/图标系统固化（10 区结构 + 封面/关键帧自动内联 + 结构自检），**全部统计数字由工具从管线产物实时计算**（manifest/comments/_cross/frames/covers），AI 只按 `references/report-template.md` 的槽位 schema 撰写 `narrative.json`（定性结论/口号/金句/方案），**不手写统计数字**；缺源章节自动省略并写入附言缺源声明，禁止虚构。`render_report.py` **仅用于博主全量视频总结 / decompose 长文**（自由 md + 主题轮换），**不再渲染对标报告**（双路径已收口，防打架）。若用户要求视频级逆向拆解 / 账号级深度总结，按 `references/decompose-methodology.md` 补齐数据链（全量每条第11节标签 → `decompose/tags.json` → 爆款TOP+典型11节深拆），**并先跑 `tools/account_metrics.py` 自动聚合账号级维度（发布节奏 / 互动交叉聚类 / 话题策略+高赞评论 → `decompose/<account>/_metrics.json`，为博主总结必吃数据）**，再按 `references/blogger-summary-prompt.md` 的**博主全量视频总结提示词**对全部视频做账号级总结（定位/选题地图/Hook/内容结构/画面/用户需求/爆款对比/DNA/机会/最终输出），产出 Markdown 后经 `tools/render_report.py` 渲染为 HTML。
 
 详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`；报告固定模板见 `references/report-template.md`；逐视频逆向拆解见 `references/decompose-methodology.md`；**博主全量视频总结提示词（账号级）见 `references/blogger-summary-prompt.md`**。
 
@@ -26,7 +26,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 ### 提速（Speed）
 - **抓取**：抓取异常/漏抓时**优先修 MediaCrawler 自身**（签名参数、分页参数、登录态），核验真实视频数，**不切浏览器兜底**（历史上曾用浏览器内 fetch 直连 API 临时救急，已弃用——其与 MediaCrawler 抓取栈脱节，易再踩坑且违背"修根因"原则）。
 - **管线断点续传**：下载/抽帧/转写均按产出自动跳过已完成项，换新数据只处理增量（实测 162 条中仅重跑新增 105 条）。
-- **转写同模型复用**：口播与 BGM 统一用 faster-whisper **large-v3**（GPU float16），BGM 复用口播已缓存的同一模型，**免二次联网下载**。
+- **转写同模型复用**：口播与 BGM 统一用 faster-whisper **large-v3**，BGM 复用口播已缓存的同一模型，**免二次联网下载**。GPU 默认 float16，不支持的卡自动降级 `int8_float32`（实测 RTF 0.27–0.30，仍远快于 CPU int8 的 1.61，约 5.6×）。
 - **阶段并行**：下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
 
 ### 提质（Quality）
@@ -47,7 +47,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 - 单会话 ~230 条 API 限制，批量需断点续传分多次跑
 - 请求间隔 8–10s，防 ArgusSecurityPlugin 拦截
 - 视觉分析必须真实，不得用推断冒充
-- 直播话术需人工校对口音误识别（产品名/工艺/茶底）
+- 直播话术需人工校对口音误识别（产品名/工艺/专业术语）
 - 报告图片用真实抽帧，不用 AI 生成图
 
 ## 运行库与依赖策略（重要）
@@ -63,8 +63,8 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 ## 内建一键流水线（tools/）
 
-本技能自带 `tools/` 可执行脚本，从"**抓取 → 去重 → 下载 → 抽帧 → 口播转写**"一条命令链跑通，统一输入 `<--root <工作根> --account <账号slug>```，统一经 `tools/runtime.py run --tool` 走项目运行库解释器：
-`crawl.py`（抓取，MediaCrawler 封装）、`patch_mediacrawler.py`（断点续传补丁）、`process.py`（去重+清单）、`download.py`（多线程下载）、`extract_frames.py`（PyAV 1fps 抽帧）、`transcribe.py`（faster-whisper GPU 择优+多worker+断点续传）、`transcribe_bgm.py`（BGM 归档：风格+mood+歌词线索，**固定 large-v3**）、`bgm_cross.py`（BGM×互动交叉：组间均值·爆款明细→`_cross.json`）、`comments.py`（评论聚合：detail_comments jsonl 按视频归并、每视频按赞截断 top N→`comments.json`）、`decompose_prep.py`（组装每视频全维度档案→`video_profiles.{json,md}`）、`account_metrics.py`（账号级自动聚合：发布节奏 / 互动交叉聚类 / 话题策略 + 高赞评论 Top20 → `_metrics.json`）、`render_report.py`（对标报告 md→自包含 HTML 渲染，对齐 report-template 固定模板，`--inline` 内联真实抽帧守卫单文件）。脚本均按产物自动断点续传，transcribe* 用 `ctranslate2.get_cuda_device_count()` 自动 CPU/GPU 择优；各脚本并发/算力（`--threads`/`--workers`/device/compute）缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无**自适应调度**。完整用法见 `references/workflow.md` 附录与 `references/commands.md`。
+本技能自带 `tools/` 可执行脚本，从"**抓取 → 去重 → 下载 → 抽帧 → 口播转写 → 报告**"一条命令链跑通，统一输入 `--root <工作根> --account <账号slug>`，统一经 `tools/runtime.py run --tool` 走项目运行库解释器：
+`crawl.py`（抓取，MediaCrawler 封装）、`patch_mediacrawler.py`（断点续传补丁）、`process.py`（去重+清单）、`download.py`（多线程下载）、`extract_frames.py`（PyAV 1fps 抽帧）、`transcribe.py`（faster-whisper GPU 择优+多worker+断点续传）、`transcribe_bgm.py`（BGM 归档：风格+mood+歌词线索，**固定 large-v3，VAD+language=zh 防音乐幻觉循环**）、`bgm_cross.py`（BGM×互动交叉：组间均值·爆款明细→`_cross.json`）、`comments.py`（评论聚合：detail_comments jsonl 按视频归并、每视频按赞截断 top N→`comments.json`）、`decompose_prep.py`（组装每视频全维度档案→`video_profiles.{json,md}`）、`account_metrics.py`（账号级自动聚合：发布节奏 / 互动交叉聚类 / 话题策略 + 高赞评论 Top20 → `_metrics.json`）、`report_html.py`（**对标报告 v2 固定骨架生成器**：数据全自动计算 + narrative.json 定性槽位 + 封面/关键帧内联 + 结构自检）、`render_report.py`（**博主总结等自由 md → HTML 渲染器**，主题轮换）。脚本均按产物自动断点续传，transcribe* 用 `ctranslate2.get_cuda_device_count()` 自动 CPU/GPU 择优；各脚本并发/算力（`--threads`/`--workers`/device/compute）缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无**自适应调度**。完整用法见 `references/workflow.md` 附录与 `references/commands.md`。
 
 ## 输出契约
 
@@ -75,7 +75,8 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 | 下载 | 视频 / 封面 | `videos/<account>/`、`covers/<account>/` |
 | 分析 | 抽帧 + 口播转写 | `video-analysis/<account>/frames/<aweme_id>/`、`transcript/<account>/` |
 | BGM | 归档 + 交叉统计 | `bgm/<account>/`（`_manifest.json`）、`bgm/<account>/_cross.json` |
-| 报告 | 对标 HTML（自包含单文件） | `{账号}-对标分析报告.html`、`{账号}-博主全量视频总结.html` |
+| 报告 | 对标 HTML（v2 固定骨架，自包含单文件） | `{账号}-对标分析报告.html`（report_html.py）+ `video-analysis/<account>/narrative.json` |
+| 报告 | 博主总结 HTML（自由 md 渲染） | `{账号}-博主全量视频总结.html`（render_report.py） |
 | 评论 | 聚合(每视频按赞截断) | `video-analysis/<account>/comments.json` |
 | 拆解 | 全量档案 + 账号级聚合 | `decompose/<account>/video_profiles.{json,md}`、`decompose/<account>/_metrics.json` |
 
