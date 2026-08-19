@@ -50,7 +50,8 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 
 ## MediaCrawler 抓取（底层参考，一般不直接手敲）
 
-> **注意（实战踩坑 2026-08-18）**：① 平台枚举是 `dy`（**不是** `douyin`，否则 `click` 报 `'douyin' is not one of 'xhs','dy',...`）；② creator 批量用 **`--creator_id`**（支持 URL 或 sec_uid），**不用** `--keywords`；③ 条数用 **`--crawler_max_notes_count`**（没有 `--max_pages`）；④ 必须**在 MediaCrawler 根目录运行**（相对引用 `libs/douyin.js`），启用 `MEDIACRAWLER_PY`/`MC_ROOT` 或全局指针定位；⑤ 登录用 `--lt qrcode|cookie|phone`，`--cookies` 传 cookie 串。
+> **注意**：MediaCrawler 抖音 creator 模式的 `--crawler_max_notes_count` 实测不会可靠截断。技能的 `--max N` 会注入 `MC_CREATOR_MAX_COUNT` 硬上限，在保存回调前裁剪并停止翻页；注入验证失败则拒绝抓取。最终 JSONL 再按主页返回顺序截断一次（保留置顶顺序）作为双保险。
+> creator 模式不能同时使用 `--no-mc-patch`；否则无法保证网络抓取在 N 条停止，工具会直接报错。
 
 ## 抓取异常处理（漏抓/截断）
 
@@ -64,7 +65,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `--type` | `search` / `detail` / `creator` |
 | `--specified_id` | detail 模式的视频/帖子 ID（逗号分隔） |
 | `--creator_id` | creator 模式的创作者 ID（逗号分隔） |
-| `--crawler_max_notes_count` | 最大抓取数 |
+| `--crawler_max_notes_count` | 仅兼容传参，不作为可靠上限；使用技能 `--max` 硬限制 |
 | `--save_data_option` | `jsonl`（默认）/ `csv` / `db` / `excel` 等 |
 | `--get_comment` | 是否抓取一级评论（默认 True） |
 

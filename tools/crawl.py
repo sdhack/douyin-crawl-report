@@ -171,6 +171,42 @@ def ensure_mc_comments_patch(mc_root):
                          'CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = int(float(os.getenv("MC_COMMENTS_COUNT", "10")))')
 
 
+def ensure_mc_creator_limit_patch(mc_root):
+    """Make creator pagination stop at MC_CREATOR_MAX_COUNT before its save callback."""
+    p = os.path.join(mc_root, "media_platform", "douyin", "client.py")
+    if not os.path.isfile(p):
+        return "missing-client"
+    src = open(p, encoding="utf-8").read()
+    marker = "MC_CREATOR_MAX_COUNT"
+    if marker in src:
+        return "already"
+    needle = "            if callback:\n                await callback(aweme_list)\n            result.extend(aweme_list)"
+    if needle not in src:
+        return "unsupported-version"
+    block = '''            creator_limit = int(os.getenv("MC_CREATOR_MAX_COUNT", "0"))
+            if creator_limit > 0:
+                remaining = max(0, creator_limit - len(result))
+                aweme_list = aweme_list[:remaining]
+            if callback:
+                await callback(aweme_list)
+            result.extend(aweme_list)
+            if creator_limit > 0 and len(result) >= creator_limit:
+                posts_has_more = 0'''
+    try:
+        bak = p + ".limit.bak"
+        if not os.path.exists(bak):
+            with open(bak, "w", encoding="utf-8") as f:
+                f.write(src)
+        patched = src.replace(needle, block, 1)
+        if "\nimport os\n" not in patched:
+            patched = patched.replace("import asyncio\n", "import asyncio\nimport os\n", 1)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(patched)
+        return "patched" if marker in open(p, encoding="utf-8").read() else "verify-failed"
+    except Exception:
+        return "write-failed"
+
+
 def rollback_mc_sleep_patch(mc_root):
     """回滚上次 sleep 补丁（有 .bak 时恢复）。"""
     p = os.path.join(mc_root, "config", "base_config.py")
@@ -268,10 +304,10 @@ def newest_raw(save_dir):
     return max(files, key=os.path.getmtime)
 
 
-def filter_dedup(raw, out, keyword):
+def filter_dedup(raw, out, keyword, hard_limit=None):
     kw = keyword
-    seen, counts = set(), {"total": 0, "matched": 0, "unique": 0}
-    with open(raw, encoding="utf-8") as fi, open(out, "w", encoding="utf-8") as fo:
+    seen, rows, counts = set(), [], {"total": 0, "matched": 0, "unique_before_limit": 0, "unique": 0}
+    with open(raw, encoding="utf-8") as fi:
         for line in fi:
             line = line.strip()
             if not line:
@@ -289,7 +325,13 @@ def filter_dedup(raw, out, keyword):
             if not aid or aid in seen:
                 continue
             seen.add(aid)
-            counts["unique"] += 1
+            rows.append(j)
+    counts["unique_before_limit"] = len(rows)
+    if hard_limit is not None:
+        rows = rows[:hard_limit]
+    counts["unique"] = len(rows)
+    with open(out, "w", encoding="utf-8") as fo:
+        for j in rows:
             fo.write(json.dumps(j, ensure_ascii=False) + "\n")
     return counts
 
@@ -327,6 +369,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="只打印命令，不实际爬取")
     a = ap.parse_args()
 
+    if a.max <= 0:
+        sys.exit("[ERR] --max 必须大于 0")
+
     validate_account_slug(a.account)
     a.mc_py, mc_root = resolve_mc()
     parent_root = a.root
@@ -353,6 +398,14 @@ def main():
     env = dict(os.environ)
     env["MC_CURSOR_DIR"] = os.path.join(a.save_dir, "cursor")  # 断点续传落项目目录
     env.setdefault("PYTHONUNBUFFERED", "1")
+    if a.mode == "creator":
+        if a.no_mc_patch:
+            sys.exit("[ERR] creator 模式的 --max 硬上限需要 MediaCrawler 补丁，不能与 --no-mc-patch 同时使用。")
+        limit_patch = ensure_mc_creator_limit_patch(mc_root)
+        if limit_patch not in ("patched", "already"):
+            sys.exit(f"[ERR] MediaCrawler creator 硬上限补丁失败({limit_patch})；无法保证 --max={a.max}，停止抓取。")
+        env["MC_CREATOR_MAX_COUNT"] = str(a.max)
+        print(f"[主页硬上限] {limit_patch}：最多保存 {a.max} 条，达到后立即停止翻页")
 
     # —— 随机延时落地：给 MediaCrawler base_config 打 env 补丁，抓取间隔由 MC_SLEEP_SEC 覆盖 ——
     if a.sleep_min is not None:
@@ -438,12 +491,12 @@ def main():
     # Account slug is a storage key, never a content filter. Filter only when explicitly requested.
     kw = a.kw
     filtered = os.path.join(a.save_dir, f"{a.account}_dedup.jsonl")
-    counts = filter_dedup(raw, filtered, kw)
+    counts = filter_dedup(raw, filtered, kw, hard_limit=a.max if a.mode == "creator" else None)
     progress.finish(bool(counts["unique"]), f"抓取完成：原始={counts['total']} 唯一={counts['unique']}")
     print("=" * 70)
     print(f"[原始文件] {raw}")
     print(f"[去重文件] {filtered}")
-    print(f"[统计] 原始 {counts['total']} 行 | 含'{kw or '(不过滤)'}' {counts['matched']} | 去重后唯一 {counts['unique']}")
+    print(f"[统计] 引擎原始 {counts['total']} 行 | 匹配 {counts['matched']} | 去重 {counts['unique_before_limit']} | 最终保留 {counts['unique']} / 上限 {a.max if a.mode == 'creator' else '不适用'}")
     print("-" * 70)
     print(f"[下一阶段] runtime.py run --tool process.py --root \"{a.root}\" --account \"{a.account}\" --json \"{filtered}\"")
     sys.exit(0 if counts["unique"] else 1)

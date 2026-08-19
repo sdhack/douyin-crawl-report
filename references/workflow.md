@@ -28,6 +28,7 @@
 1. 从账号 URL 提取 `sec_user_id`：`https://www.douyin.com/user/{sec_uid}`
 2. 运行 creator 抓取（`--target "<sec_uid>" --max N`）
 3. **断点续传与进度**：MediaCrawler cursor 写入 `<run-root>/crawl_<account>/cursor/`；运行目录根同时生成追加式 `run.log` 与原子状态 `run-state.json`，每 60 秒记录当前阶段。传回同一个 `--run-dir` 可续跑，新抓取默认创建新目录。
+4. **主页数量硬限制**：creator 模式的 `--max N` 不依赖 MediaCrawler 原生参数；技能在每页保存回调前裁剪到剩余数量并达到 N 后停止翻页，最终产物再按主页返回顺序截断。补丁无法验证时直接退出。
 4. **单会话限制**：约 230 条 API 后连接被终止，重跑命令利用断点续传继续抓剩余
 5. 抓取完成后自动过滤去重，产出 `<account>_dedup.jsonl`；`--dry-run` 可先预览命令
 

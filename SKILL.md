@@ -13,7 +13,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 ## 流程概览（4 阶段）
 
-1. **抓取**（`tools/crawl.py`，技能内建 MediaCrawler 封装）：detail 模式抓单个，creator 模式批量抓账号。自动解析 MediaCrawler（env/全局指针/cache）、断点续传（`MC_CURSOR_DIR` 落项目）、进度写 `<root>/crawl_<account>/crawl.log`，产物落项目目录。`--dry-run` 可先预览命令。**每个 creator 必须使用唯一 `--account` slug**；工具在 `<root>/accounts/<account>.json` 绑定 `sec_uid`，同一 slug 指向不同账号时直接拒绝，所有后续产物按 `<account>` 子目录隔离。**若 MediaCrawler 本身抓取失败，先修 MediaCrawler 后再重抓，不切浏览器兜底。**
+1. **抓取**（`tools/crawl.py`，技能内建 MediaCrawler 封装）：detail 模式抓单个，creator 模式批量抓账号。creator 的 `--max N` 由技能给 MediaCrawler 注入并验证硬上限，在保存回调前裁剪当前页，达到 N 后停止翻页；补丁不兼容时直接退出，后处理再按主页返回顺序硬截断一次，不能仅信任失效的 `--crawler_max_notes_count`。自动解析 MediaCrawler、断点续传、进度日志并隔离运行目录。**每个 creator 必须使用唯一 `--account` slug**；同一 slug 指向不同账号时直接拒绝。MediaCrawler 失败时不切其他抓取兜底。
    - **评论抓取**：默认开启，每个视频目标抓取 100 条一级评论（`--comments-count 100`）；只有显式传 `--no-comment` 才跳过。评论产物落 `<root>/crawl_<account>/douyin/jsonl/detail_comments_*.jsonl`，再由 `comments.py` 按赞聚合且每视频最多保留 100 条。评论 API 需登录态；登录态不可用或无法保证 100 条配置时直接失败，不静默降级。**注意**：批处理循环用 Python `subprocess` 驱动，勿用 `powershell -File` 拼中文路径。
 2. **数据处理**：`process.py` 去重→manifest → `download.py` 下载视频/封面 → 图文切分。
 3. **内容分析**：优先用 `analyze.py` 一键执行“音频转写 → 自适应抽帧与 BGM 并行 → 逐帧视觉分析”。每视频最低 12 个均匀采样点，前三秒 3 FPS，镜头突变补帧，低置信度视频 5 FPS；输出 `frames.json`、单视频 `visual-summary.json` 和账号 `_visual-summary.json`，覆盖画风、色彩、构图、场景候选、字幕样式与产品露出候选。场景和产品候选必须保留置信度/待复核状态，禁止当成确定识别结果。
