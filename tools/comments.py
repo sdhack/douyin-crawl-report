@@ -7,7 +7,7 @@
     summary: { total_videos, total_comments, covered_aweme_ids }
 截断策略: 每视频按 like_count 降序取前 --max 条(默认 100)，保留代表性评论。
 用法: python tools/comments.py --root <根> --account <slug> [--max 100]
-来源: <root>/crawl_comments/**/detail_comments_*.jsonl  或  <root>/data/douyin/**/detail_comments_*.jsonl
+来源: <root>/crawl_<account>/**/detail_comments_*.jsonl，或显式 --comments-path
 """
 import argparse, glob, json, os, datetime
 
@@ -24,9 +24,14 @@ def main():
     if a.comments_path and os.path.isfile(a.comments_path):
         fps = [a.comments_path]
     else:
-        for base in ("crawl_comments", "data"):
-            pat = os.path.join(a.root, base, "**", "detail_comments*.jsonl")
-            fps += sorted(glob.glob(pat, recursive=True))
+        pat = os.path.join(a.root, "crawl_" + a.account, "**", "detail_comments*.jsonl")
+        fps = sorted(glob.glob(pat, recursive=True))
+
+    manifest_path = os.path.join(a.root, "video-analysis", a.account, "manifest.json")
+    allowed_aweme_ids = None
+    if os.path.isfile(manifest_path):
+        with open(manifest_path, encoding="utf-8") as f:
+            allowed_aweme_ids = {str(x.get("aweme_id")) for x in json.load(f) if x.get("aweme_id")}
 
     by_aweme = {}
     total = 0
@@ -44,6 +49,8 @@ def main():
             content = (ct.get("content") or "").strip()
             cid = str(ct.get("comment_id") or "")
             if not aid or not content:
+                continue
+            if allowed_aweme_ids is not None and aid not in allowed_aweme_ids:
                 continue
             if cid:
                 s = seen.setdefault(aid, set())

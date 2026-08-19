@@ -18,7 +18,7 @@ MediaCrawler 本体不随技能复制，保留在 `~/.cache/codex-mediacrawler/M
   # 只打印将执行的命令，不真正爬（校验用）
   ... --dry-run
 
-产物: <root>/crawl_<account>/  （原始 jsonl + 过滤去重 jsonl + crawl.log）
+产物: <run-root>/crawl_<account>/  （原始 jsonl + 过滤去重 jsonl + crawl.log）
 下一阶段: runtime.py run --tool process.py --root <root> --account <account> --json <过滤后jsonl>
 """
 import argparse
@@ -43,6 +43,88 @@ _MODES = ("creator", "detail", "search")
 _LTS = ("qrcode", "cookie", "phone")
 # --speed 预设并发（MediaCrawler 抖音多 context 并行，2-3 已是安全偏激进上限）
 _SPEED_CONC = {"safe": 1, "normal": 2, "fast": 3}
+_SAFE_ACCOUNT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+
+
+def validate_account_slug(slug):
+    """Keep every account inside its own predictable project directory."""
+    if not _SAFE_ACCOUNT.fullmatch(slug) or slug in (".", ".."):
+        sys.exit("[ERR] --account 仅允许 1-80 位字母、数字、点、下划线或连字符，且必须以字母或数字开头。")
+
+
+def bind_account_identity(root, slug, mode, target, dry_run=False):
+    """Bind a local slug to one creator sec_uid and reject cross-account mixing."""
+    accounts_dir = os.path.join(root, "accounts")
+    meta_path = os.path.join(accounts_dir, slug + ".json")
+    current = {}
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                current = json.load(f)
+        except Exception as e:
+            sys.exit(f"[ERR] 账号身份文件损坏，拒绝继续以免混入数据：{meta_path} ({e})")
+    bound = current.get("creator_sec_uid")
+    if mode == "creator" and bound and bound != target:
+        sys.exit(
+            f"[ERR] 账号 slug '{slug}' 已绑定其他 sec_uid，拒绝混写。\n"
+            f"  已绑定: {bound}\n  本次: {target}\n"
+            "  请为新账号使用不同的 --account slug。"
+        )
+    if dry_run:
+        return meta_path
+    os.makedirs(accounts_dir, exist_ok=True)
+    if mode == "creator":
+        current["creator_sec_uid"] = target
+    current.update({
+        "account": slug,
+        "last_mode": mode,
+        "last_target": target,
+        "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "paths": {
+            "crawl": f"crawl_{slug}",
+            "manifest": f"video-analysis/{slug}",
+            "videos": f"videos/{slug}",
+            "covers": f"covers/{slug}",
+            "transcript": f"transcript/{slug}",
+            "bgm": f"bgm/{slug}",
+            "decompose": f"decompose/{slug}",
+            "reports": f"reports/{slug}",
+        },
+    })
+    tmp = meta_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(current, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, meta_path)
+    return meta_path
+
+
+def make_run_dir(parent, slug, explicit=None):
+    """Create a unique self-contained workspace for one crawl invocation."""
+    if explicit:
+        path = os.path.abspath(explicit)
+        if os.path.exists(path) and os.listdir(path):
+            sys.exit(f"[ERR] --run-dir 已存在且非空，拒绝混入历史内容：{path}")
+    else:
+        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}")
+        suffix = 2
+        while os.path.exists(path):
+            path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}-{suffix}")
+            suffix += 1
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def validate_save_dir(run_root, account, save_dir):
+    if not save_dir:
+        return os.path.join(run_root, "crawl_" + account)
+    path = os.path.abspath(save_dir)
+    try:
+        if os.path.commonpath([os.path.abspath(run_root), path]) != os.path.abspath(run_root):
+            sys.exit("[ERR] --save-dir 必须位于本次运行目录内，禁止把数据写到运行目录外。")
+    except ValueError:
+        sys.exit("[ERR] --save-dir 与运行目录不在同一文件系统，禁止跨目录写入。")
+    return path
 
 
 def _patch_verify(p, marker, pat, new):
@@ -135,11 +217,16 @@ def tee_run(py, main_args, mc_root, log_path, env, timeout=None):
 
     timeout=None 时不限时（长任务不误杀）；给定秒数则超时后 terminate 并返回 -9。
     用泵线程读 stdout，避免子进程在未产输出时永久挂起主线程。"""
-    proc = subprocess.Popen(
-        [py, main_args[0]] + main_args[1:],
-        cwd=mc_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, encoding="utf-8", errors="replace", bufsize=1,
-    )
+    try:
+        proc = subprocess.Popen(
+            [py, main_args[0]] + main_args[1:],
+            cwd=mc_root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+        )
+    except (FileNotFoundError, OSError) as e:
+        print(f"[ERR] MediaCrawler 无法启动：{e}")
+        print("[停止] 不执行浏览器 API、网页抓取或其他兜底方案。")
+        return 127
     import threading
     errors = []
 
@@ -207,14 +294,19 @@ def filter_dedup(raw, out, keyword):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="工作根目录（产物将落在 <root>/crawl_<account>）")
-    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
+    ap.add_argument("--root", required=True, help="运行目录父目录；每次抓取自动新建独立子目录")
+    ap.add_argument("--account", required=True, help="账号唯一 slug，如 brand-001；不同账号不得复用")
     ap.add_argument("--mode", choices=_MODES, required=True, help="creator=账号全量 / detail=单条 / search=关键词")
     ap.add_argument("--target", required=True, help="creator: sec_uid；detail: aweme_id/URL；search: 关键词")
     ap.add_argument("--max", type=int, default=100, help="最大抓取数 (crawler_max_notes_count)")
     ap.add_argument("--lt", choices=_LTS, default="qrcode", help="登录方式")
     ap.add_argument("--cookies", default=None, help="cookie 登录时的 cookie 串")
-    ap.add_argument("--get-comment", dest="get_comment", action="store_true", help="抓一级评论（默认关，提速）")
+    comment_group = ap.add_mutually_exclusive_group()
+    comment_group.add_argument("--get-comment", dest="get_comment", action="store_true",
+                               help="抓一级评论（默认开启）")
+    comment_group.add_argument("--no-comment", dest="get_comment", action="store_false",
+                               help="显式跳过评论抓取")
+    ap.set_defaults(get_comment=True)
     ap.add_argument("--comments-count", type=int, default=100,
                     help="单视频最多抓取的一级评论数（默认100；MediaCrawler 出厂硬编码10，本参数会打 env 补丁覆盖）")
     ap.add_argument("--headless", action="store_true", help="无头模式")
@@ -227,13 +319,18 @@ def main():
     ap.add_argument("--max-min", type=float, default=None,
                     help="单次抓取最大运行分钟数（防子进程永久挂起；缺省不限时，长任务不误杀）")
     ap.add_argument("--no-mc-patch", action="store_true", help="不修改 MediaCrawler 源码（仅改用并发提速，随机延时参数失效）")
-    ap.add_argument("--save-dir", dest="save_dir", default=None, help="抓取产物目录（缺省 <root>/crawl_<account>）")
-    ap.add_argument("--account-filter", dest="kw", default=None, help="过滤关键词（缺省用 --account，用于剔除混入的其它账号数据）")
+    ap.add_argument("--run-dir", default=None, help="指定本次独立运行目录（必须为空或不存在）")
+    ap.add_argument("--save-dir", dest="save_dir", default=None, help="高级覆盖：仅改变 MediaCrawler 原始数据目录")
+    ap.add_argument("--account-filter", dest="kw", default=None, help="可选内容过滤关键词；缺省不过滤，禁止用目录 slug 猜测内容")
     ap.add_argument("--dry-run", action="store_true", help="只打印命令，不实际爬取")
     a = ap.parse_args()
 
+    validate_account_slug(a.account)
     a.mc_py, mc_root = resolve_mc()
-    a.save_dir = a.save_dir or os.path.join(a.root, "crawl_" + a.account)
+    parent_root = a.root
+    a.root = make_run_dir(parent_root, a.account, a.run_dir)
+    identity_path = bind_account_identity(a.root, a.account, a.mode, a.target, dry_run=a.dry_run)
+    a.save_dir = validate_save_dir(a.root, a.account, a.save_dir)
     os.makedirs(os.path.join(a.save_dir, "cursor"), exist_ok=True)
     a.speed = a.speed or "safe"
     a.concurrency = a.concurrency or _SPEED_CONC[a.speed]
@@ -247,6 +344,8 @@ def main():
     pretty = " \\\n  ".join(cmd)
     print("=" * 70)
     print(f"[MediaCrawler] 平台=dy 模式={a.mode} 目标={a.target} 上限={a.max}")
+    print(f"[账号隔离] {a.account} -> {identity_path}")
+    print(f"[本次运行目录] {a.root}")
     print(f"[命令] {pretty}")
 
     env = dict(os.environ)
@@ -270,6 +369,8 @@ def main():
     # —— 评论数上限落地：MediaCrawler 出厂单视频 10 条，打 env 补丁让 MC_COMMENTS_COUNT 覆盖 ——
     if a.get_comment and a.comments_count != 10:
         r = ensure_mc_comments_patch(mc_root)
+        if r not in ("patched", "already"):
+            sys.exit(f"[ERR] 评论上限补丁失败({r})，无法保证每视频 100 条；停止抓取，不降级到 10 条。")
         env["MC_COMMENTS_COUNT"] = str(a.comments_count)
         print(f"[评论数补丁] {r}（CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES 可由 MC_COMMENTS_COUNT 覆盖）")
         print(f"[评论数] 本次单视频上限 MC_COMMENTS_COUNT={env['MC_COMMENTS_COUNT']} 条")
@@ -302,6 +403,11 @@ def main():
             print(f"[重试] 退出码 {rc}，{wait}s 后重试...")
             time.sleep(wait)
 
+    # Never process stale or partial output after a crawler failure.
+    if rc != 0:
+        print(f"[停止] MediaCrawler 退出码 {rc}；不执行任何兜底方案。请修复 MediaCrawler 后重试。")
+        sys.exit(rc or 1)
+
     # —— 产物判定：detail+get_comment 看 detail_comments_*.jsonl（勿用账号关键词过滤，会误删评论） ——
     comment_mode = (a.mode == "detail") and a.get_comment
     if comment_mode:
@@ -321,8 +427,8 @@ def main():
         print("[提示] save_dir 下未发现 *_contents*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
         sys.exit(rc or 1)
 
-    # search 模式按关键词找内容，不应再用账号 slug 过滤（会误删相关结果）；仅 creator 模式默认按账号关键词剔除混入数据
-    kw = a.kw or (a.account if a.mode == "creator" else None)
+    # Account slug is a storage key, never a content filter. Filter only when explicitly requested.
+    kw = a.kw
     filtered = os.path.join(a.save_dir, f"{a.account}_dedup.jsonl")
     counts = filter_dedup(raw, filtered, kw)
     print("=" * 70)

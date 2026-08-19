@@ -1,27 +1,30 @@
 # -*- coding: utf-8 -*-
 """数据处理：jsonl 按 aweme_id 去重 -> 排序 -> 生成 manifest.json（下载清单）
 用法: python tools/process.py --root <工作根> --account <slug> [--json <去重jsonl>]
-  --json 缺省时自动取 <root>/data/douyin/jsonl/*.jsonl 中最新一个。
+  --json 缺省时只取当前运行目录 <root>/crawl_<account>/douyin/jsonl/*.jsonl 中最新一个。
 输出: <root>/video-analysis/<account>/manifest.json
 """
 import argparse, json, os, sys, glob
 
 
-def latest_jsonl(root):
-    files = glob.glob(os.path.join(root, "data", "douyin", "jsonl", "*.jsonl"))
+def latest_jsonl(root, account):
+    # Never scan another account's crawl directory. Legacy shared layouts must
+    # be supplied explicitly with --json because their ownership is ambiguous.
+    pattern = os.path.join(root, "crawl_" + account, "douyin", "jsonl", "*.jsonl")
+    files = glob.glob(pattern)
     return max(files, key=os.path.getmtime) if files else None
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="工作根目录（含 data/ 的目录）")
-    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
+    ap.add_argument("--root", required=True, help="工作根目录（产物落在此目录）")
+    ap.add_argument("--account", required=True, help="仅用于目录命名的 slug，如 myaccount")
     ap.add_argument("--json", default=None, help="去重前原始 jsonl 路径")
     a = ap.parse_args()
 
-    src = a.json or latest_jsonl(a.root)
+    src = a.json or latest_jsonl(a.root, a.account)
     if not src or not os.path.exists(src):
-        sys.exit(f"[ERR] 找不到 jsonl: {src or '(未指定 --json 且 data/douyin/jsonl/ 为空)'}")
+        sys.exit(f"[ERR] 找不到当前账号 jsonl: {src or f'crawl_{a.account}/douyin/jsonl 为空'}。旧共享目录必须显式传 --json。")
 
     outdir = os.path.join(a.root, "video-analysis", a.account)
     os.makedirs(outdir, exist_ok=True)

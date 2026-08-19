@@ -43,7 +43,7 @@
 
 ## 评论抓取与拆解
 
-- **`crawl.py --get-comment` 默认关**（2026-08 首跑暴露）：creator 批量抓视频**不会**带评论，评论区会整体缺源。要做评论区分析，需对全量 `aweme_id` 用 `detail` 模式 + `--get-comment` 分批补抓，落 `detail_comments_*.jsonl`，再用 `comments.py` 聚合（每视频按赞降序截断 top N）。
+- **评论抓取默认开启，每视频目标 100 条**：`crawl.py` 默认启用评论并设置 `MC_COMMENTS_COUNT=100`；只有明确不需要评论时传 `--no-comment`。评论落 `detail_comments_*.jsonl`，再用 `comments.py` 聚合并按赞保留每视频最多 100 条。若登录态或配置补丁不可用，必须报错，不得静默退回出厂 10 条。
 - **评论 API 需登录态，但可复用**：MediaCrawler 在账号/单视频抓取完成、登录态仍在有效期时，`detail` 补抓评论会 CDP 自动拉起已登录 Edge，**无需重新扫码**，可串行多批抓完。每视频抓之间有 sleep 间隔，70 条视频全量约 30-40 分钟。
 - **crawl.py 首次真实执行必现的 Popen bug**：`tee_run(a.mc_py, cmd, ...)` 误把**整个 cmd 数组**（含 `cmd[0]=python.exe`）当 main_args，tee_run 内部又前列插 `py` → 实际命令变成 `python.exe python.exe main.py ...`，解释器拿第一个 python.exe（PE 头 `MZ`）当脚本解析，报 `"File ...python.exe line 1 MZx" + source code cannot contain null bytes`。**修复：应传 `cmd[1:]`**。教训：凡封装脚本新增子进程调用，先核对 Popen 参数是否应从 `cmd[1:]` 起步。
 - **勿用 `powershell -File` 拼中文路径做批处理**：代码页乱码会让 `Get-Content _batches.json` 路径失效，整个脚本第一句就报错退出（但进程 exit 0，极易被误判成功）。批处理循环一律用 **python 脚本 + `subprocess`** 驱动，中文路径天然安全。

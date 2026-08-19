@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.4.0-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.4.7-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -21,7 +21,7 @@ flowchart LR
     B --> C["③ 下载 + 抽帧 download / extract_frames<br/>多线程 · 多进程 1fps"]
     C --> D["④ 口播转写 transcribe.py<br/>GPU 择优 · 术语纠错"]
     C --> E["⑤ BGM 分析 transcribe_bgm.py<br/>强度 · 情绪 · ×互动交叉"]
-    B --> F["⑥ 评论抓取/聚合 crawl --get-comment → comments.py"]
+    B --> F["⑥ 评论抓取/聚合 crawl（默认100条）→ comments.py"]
     D --> G["⑦ 拆解 decompose_prep → tags<br/>全维度档案 + 18 字段标签"]
     F --> G
     E --> G
@@ -56,7 +56,7 @@ flowchart LR
 
 | 阶段 | 工具 | 亮点 |
 |---|---|---|
-| 抓取 | `crawl.py` | 账号主页 / 单视频 / 搜索全模式；断点续传（落项目目录）；`--speed` 并发档 + 随机延时 + 指数退避重试抗风控；`--get-comment` 评论抓取提速（突破出厂 10 条上限） |
+| 抓取 | `crawl.py` | 每次调用自动新建独立运行目录；账号主页 / 单视频 / 搜索全模式；默认每视频抓取 100 条一级评论；`--no-comment` 可显式跳过；断点续传、并发档、随机延时与失败重试 |
 | 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，只跑增量不重复劳动 |
 | 下载 | `download.py` | 多线程并行，并发按机器自适应 |
 | 抽帧 | `extract_frames.py` | PyAV 1fps，**多进程并行 3.5× 提速** |
@@ -107,12 +107,13 @@ py -3 $SKILL/tools/runtime.py run --tool crawl.py --root <根> --account <slug> 
 # ① 抓取（断点续传 + 去重）
 python tools/crawl.py --root <根> --account <slug> --mode creator --target "<sec_uid>" --max 90
 # ② 数据处理 + 下载 + 抽帧 + 转写
-python tools/process.py --root <根> --account <slug>
+  python tools/process.py --root <本次运行目录> --account <slug>
 python tools/download.py --root <根> --account <slug>
 python tools/extract_frames.py --root <根> --account <slug>
 python tools/transcribe.py --root <根> --account <slug> --map term_map.json
 # ③ 评论洞察 + 单视频拆解 + 账号聚合
-python tools/crawl.py --root <根> --account <slug> --mode detail --get-comment --target "<id1>,<id2>..."
+python tools/crawl.py --root <父目录> --account <slug> --mode detail --target "<id1>,<id2>..."
+# 抓取结束后，把控制台打印的“本次运行目录”作为后续命令的 --root
 python tools/comments.py --root <根> --account <slug>
 python tools/decompose_prep.py --root <根> --account <slug>
 python tools/account_metrics.py --root <根> --account <slug>

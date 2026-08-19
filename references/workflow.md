@@ -15,23 +15,25 @@
 
 ## 阶段 1：抓取（crawl.py）
 
+每次抓取都会在 `--root` 指定的父目录下新建 `<account>-YYYYMMDD-HHMMSS/` 运行目录。抓取结束后，以控制台打印的“本次运行目录”作为后续 `process.py`、`download.py`、`analyze.py` 和报告命令的 `--root`，确保一轮任务的所有文件集中在同一个文件夹。
+
 ### 单个视频（detail 模式）
 
 1. 从视频 URL 提取 `aweme_id`：`https://www.douyin.com/video/{aweme_id}`
 2. 运行 detail 抓取（`--target <aweme_id>` 或逗号分隔多个）
-3. 产物：`<root>/crawl_<account>/` 原始 jsonl
+3. 产物：`<run-root>/crawl_<account>/` 原始 jsonl
 
 ### 批量抓取（creator 模式）
 
 1. 从账号 URL 提取 `sec_user_id`：`https://www.douyin.com/user/{sec_uid}`
 2. 运行 creator 抓取（`--target "<sec_uid>" --max N`）
-3. **断点续传**：进度写入 `<root>/crawl_<account>/cursor/`（`MC_CURSOR_DIR` 落项目，不占 cache），中断重跑同一命令自动续传
+3. **断点续传**：进度写入 `<run-root>/crawl_<account>/cursor/`（`MC_CURSOR_DIR` 落本次运行目录），同一运行目录重试可续传；新抓取默认创建新运行目录
 4. **单会话限制**：约 230 条 API 后连接被终止，重跑命令利用断点续传继续抓剩余
 5. 抓取完成后自动过滤去重，产出 `<account>_dedup.jsonl`；`--dry-run` 可先预览命令
 
-### 评论补抓（--get-comment，评论区分析前提）
+### 评论抓取（默认开启，每视频 100 条）
 
-- 对标拆解要做评论区分析时，用 **detail 模式 + `--get-comment`** 对全量 `aweme_id` 分批补抓（每次逗号分隔成批、`--max` 控每条视频上限），落 `detail_comments_*.jsonl`。
+- 所有抓取默认开启评论，每个视频目标 100 条一级评论；`--comments-count` 可覆盖，只有显式 `--no-comment` 才跳过。评论落 `detail_comments_*.jsonl`。
 - **提速参数**（更快与不被封兼得）：`--speed normal|fast`（并发 2/3）、`--sleep-min 3 --sleep-max 8`（随机延时覆盖 MediaCrawler 固定 10s）、`--retry-fail 2`（指数退避重试）、`--comments-count 100`（突破出厂单视频 10 条评论上限）。
 - 评论 API 需登录态；追账期内可直接复用登录态，无需重复扫码。
 - **注意**：批处理循环用 python 脚本（`subprocess`）驱动，勿用 `powershell -File` 拼中文路径（代码页会乱码导致整脚本早退）。

@@ -31,7 +31,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode creator --target "<sec_uid>" --dry-run
 ```
 
-**评论抓取提速（--get-comment + 提速参数，2026-08 落地）**：`detail` 模式 + `--get-comment` 分批补抓评论，配以下提速参数在「更快」与「不被封」间平衡：
+**评论抓取提速（默认开启、每视频 100 条）**：抓取命令默认带评论，`--comments-count` 默认 100；仅在明确不需要评论时传 `--no-comment`。配以下参数在「更快」与「不被封」间平衡：
 
 ```bat
 REM 批量补评论：并发=2、每次抓取延时随机取 [3,8]s、失败自动重试2次(指数退避)
@@ -46,7 +46,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 - `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 打 `MC_COMMENTS_COUNT` env 补丁（自动备份 `.bak`）突破，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
 - 评论模式产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，输出 `comments.py` 下一阶段命令。
 
-产物：`<root>/crawl_<account>/`（原始 jsonl + `<account>_dedup.jsonl` 过滤去重 + crawl.log）。下一阶段自动提示 `process.py`（评论模式则提示 `comments.py`）命令。
+产物：`<run-root>/crawl_<account>/`（原始 jsonl + `<account>_dedup.jsonl` 过滤去重 + crawl.log）。下一阶段命令中的 `--root` 使用控制台打印的本次运行目录。
 
 ## MediaCrawler 抓取（底层参考，一般不直接手敲）
 
@@ -81,7 +81,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 
 | 脚本 | 命令 | 产出 |
 |---|---|---|
-| `tools/crawl.py` | `runtime.py run --tool crawl.py --root <root> --account <slug> --mode creator\|detail\|search --target <sec_uid\|aweme_id\|关键词> [--max N] [--get-comment] [--speed safe\|normal\|fast\|--concurrency N] [--sleep-min F --sleep-max F] [--retry-fail N] [--no-mc-patch] [--lt cookie --cookies "…"] [--dry-run]` | 抓取 → `<root>/crawl_<account>/`（原始 jsonl + 过滤去重 + crawl.log）；评论模式另看 `detail_comments_*.jsonl` |
+| `tools/crawl.py` | `runtime.py run --tool crawl.py --root <parent> --account <slug> --mode creator\|detail\|search --target <sec_uid\|aweme_id\|关键词> [--max N] [--comments-count 100\|--no-comment] [--speed safe\|normal\|fast\|--concurrency N] [--sleep-min F --sleep-max F] [--retry-fail N] [--no-mc-patch] [--lt cookie --cookies "…"] [--dry-run]` | 默认抓每视频最多 100 条评论；每次创建 `<parent>/<slug>-时间戳/`，后续产物均在该运行目录内 |
 | `tools/patch_mediacrawler.py` | `python tools/patch_mediacrawler.py [<client.py>]` | 给 MediaCrawler 打断点续传补丁（一次性） |
 | `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
 | `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
