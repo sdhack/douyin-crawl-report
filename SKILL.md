@@ -22,6 +22,8 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 详细命令见 `references/workflow.md`、`references/commands.md`；经验教训见 `references/lessons-learned.md`；报告固定模板见 `references/report-template.md`；逐视频逆向拆解见 `references/decompose-methodology.md`；**博主全量视频总结提示词（账号级）见 `references/blogger-summary-prompt.md`**。
 
+发布或推送本技能前必须读取 `references/distribution.md` 的“发布前检查”：Commit 信息一律使用中文，每次提交必须同步更新 README；发布版本还需同步 `manifest.json` 与 README 版本徽章。
+
 ## 实战优化要点（2026-08 迭代沉淀）
 
 ### 提速（Speed）

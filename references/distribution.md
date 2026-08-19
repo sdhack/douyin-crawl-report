@@ -30,11 +30,13 @@
 
 ## 发布前检查
 
-1. 在全新工作根目录运行 `runtime.py doctor`。
-2. 用 `process.py --root <root> --account <slug>` 验证两种 JSONL 布局均可发现。
-3. 检查 `aweme_id` 去重、视频 URL 缺失统计和失败产物列表。
-4. 报告中的数字必须由管线产物计算，缺源必须显式声明。
-5. 在至少一种无 GPU 或无评论环境中做一次降级验证。
+1. Git Commit 标题和说明必须使用中文，清楚描述用户可感知的改动；禁止使用英文 Conventional Commit 标题。
+2. 每次提交必须同时修改 `README.md`，至少更新版本徽章、功能说明或“更新日志”中的一项；不允许代码已变而 README 无记录。
+3. 发布版本时同步更新 `manifest.json` 版本号与 README 版本徽章。
+4. 在全新工作根目录运行 `runtime.py doctor`。
+5. 用 `process.py --root <root> --account <slug>` 验证 JSONL 发现与账号隔离。
+6. 检查 `aweme_id` 去重、视频 URL 缺失统计和失败产物列表。
+7. 报告中的数字必须由管线产物计算，缺源必须显式声明。
 
 ## 一键分析调度
 

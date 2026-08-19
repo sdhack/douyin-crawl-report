@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.6.1-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.6.2-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -221,6 +221,15 @@ douyin-crawl-report/
 ## 📄 LICENSE
 
 [MIT](./LICENSE)
+
+---
+
+## 更新日志
+
+- **v0.6.2（2026-08-19）**：建立中文发布规范；Git Commit 信息必须使用中文，每次提交必须同步更新 README 的版本或更新日志。
+- **v0.6.1（2026-08-19）**：修复抖音主页 `--max` 不截断问题，达到指定数量后停止翻页，并对最终 JSONL 二次硬截断。
+- **v0.6.0（2026-08-19）**：新增画风、色彩、构图、场景候选、字幕样式和产品露出候选的结构化视觉分析。
+- **v0.5.0（2026-08-19）**：新增自适应抽帧、逐帧时间轴、运行日志、每分钟进度心跳和断点状态。
 
 ---
 
