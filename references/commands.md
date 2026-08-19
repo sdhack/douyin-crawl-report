@@ -23,6 +23,7 @@ py -3 %SKILL%\tools\runtime.py run --tool transcribe.py --root <工作根> --acc
 set SKILL=%USERPROFILE%\.trae-cn\skills\douyin-crawl-report
 REM 账号主页全量（--target 填 sec_uid）
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode creator --target "<sec_uid>" --max 90
+REM 同账号默认复用父目录当前运行根；仅明确开启新一轮时追加 --new-run
 REM 单条视频 / 关键词搜索
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode detail --target "<aweme_id>"
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode search --target "关键词"
@@ -46,7 +47,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 - `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 打 `MC_COMMENTS_COUNT` env 补丁（自动备份 `.bak`）突破，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
 - 评论模式产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，输出 `comments.py` 下一阶段命令。
 
-产物：`<run-root>/crawl_<account>/` 与运行目录根唯一的 `run.log`、`run-state.json`。首次调用创建 `.douyin-crawl-run.json`；评论补抓和续跑使用 `--run-dir <run-root>`。即使误把 `<run-root>` 传给 `--root`，工具也会识别并复用，不创建嵌套目录。
+产物：`<run-root>/crawl_<account>/` 与运行目录根唯一的 `run.log`、`run-state.json`。父目录维护 `.douyin-crawl-current-<account>.json`，不同 Agent 仅传父目录也会复用当前根；并发创建由账号级锁串行化。只有 `--new-run` 新建下一轮。
 
 ## MediaCrawler 抓取（底层参考，一般不直接手敲）
 

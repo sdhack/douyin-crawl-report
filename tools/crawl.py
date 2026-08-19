@@ -133,26 +133,93 @@ def _write_run_marker(path, slug):
                   f, ensure_ascii=False, indent=2)
 
 
-def make_run_dir(parent, slug, explicit=None):
-    """Create a run root once, or reuse it when a later phase passes that root back."""
+def _pointer_path(parent, slug):
+    return os.path.join(parent, f".douyin-crawl-current-{slug}.json")
+
+
+def _set_pointer(parent, slug, run_root):
+    path = _pointer_path(parent, slug)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"account": slug, "run_root": os.path.abspath(run_root),
+                   "updated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")},
+                  f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+def _current_run(parent, slug):
+    pointer = _pointer_path(parent, slug)
+    if os.path.isfile(pointer):
+        try:
+            path = os.path.abspath(json.load(open(pointer, encoding="utf-8")).get("run_root", ""))
+            if os.path.isdir(path) and os.path.dirname(path) == parent and _existing_run(path, slug):
+                return path
+        except Exception:
+            pass
+    candidates = []
+    for path in glob.glob(os.path.join(parent, slug + "-????????-??????*")):
+        if os.path.isdir(path) and os.path.dirname(os.path.abspath(path)) == parent and _existing_run(path, slug):
+            candidates.append(os.path.abspath(path))
+    return max(candidates, key=os.path.getmtime) if candidates else None
+
+
+def _acquire_run_lock(parent, slug, timeout=30):
+    lock = os.path.join(parent, f".douyin-crawl-{slug}.lock")
+    deadline = time.time() + timeout
+    while True:
+        try:
+            os.mkdir(lock)
+            return lock
+        except FileExistsError:
+            if time.time() >= deadline:
+                sys.exit(f"[ERR] 等待其他 Agent 创建运行目录超时：{lock}")
+            time.sleep(0.2)
+
+
+def _release_run_lock(lock):
+    try:
+        os.rmdir(lock)
+    except OSError:
+        pass
+
+
+def make_run_dir(parent, slug, explicit=None, new_run=False):
+    """Resolve one cross-agent run root; only --new-run opens another collection session."""
     if explicit:
         path = os.path.abspath(explicit)
         os.makedirs(path, exist_ok=True)
         if os.listdir(path) and not _existing_run(path, slug):
             sys.exit(f"[ERR] --run-dir 已存在但不是账号 {slug} 的运行目录：{path}")
+        parent = os.path.dirname(path)
     else:
         parent = os.path.abspath(parent)
         if os.path.isdir(parent) and _existing_run(parent, slug):
             _write_run_marker(parent, slug)
             return parent
-        stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(parent, f"{slug}-{stamp}")
-        suffix = 2
-        while os.path.exists(path):
-            path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}-{suffix}")
-            suffix += 1
+        os.makedirs(parent, exist_ok=True)
+        lock = _acquire_run_lock(parent, slug)
+        try:
+            if not new_run:
+                current = _current_run(parent, slug)
+                if current:
+                    _write_run_marker(current, slug)
+                    _set_pointer(parent, slug, current)
+                    return current
+            stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            path = os.path.join(parent, f"{slug}-{stamp}")
+            suffix = 2
+            while os.path.exists(path):
+                path = os.path.join(parent, f"{slug}-{stamp}-{suffix}")
+                suffix += 1
+            os.makedirs(path, exist_ok=True)
+            _write_run_marker(path, slug)
+            _set_pointer(parent, slug, path)
+            return path
+        finally:
+            _release_run_lock(lock)
     os.makedirs(path, exist_ok=True)
     _write_run_marker(path, slug)
+    _set_pointer(parent, slug, path)
     return path
 
 
@@ -405,6 +472,7 @@ def main():
                     help="单次抓取最大运行分钟数（防子进程永久挂起；缺省不限时，长任务不误杀）")
     ap.add_argument("--no-mc-patch", action="store_true", help="不修改 MediaCrawler 源码（仅改用并发提速，随机延时参数失效）")
     ap.add_argument("--run-dir", default=None, help="指定本次运行目录；已存在时校验账号身份并断点续跑")
+    ap.add_argument("--new-run", action="store_true", help="显式开始全新一轮采集；缺省复用父目录记录的当前运行根")
     ap.add_argument("--save-dir", dest="save_dir", default=None, help="高级覆盖：仅改变 MediaCrawler 原始数据目录")
     ap.add_argument("--account-filter", dest="kw", default=None, help="可选内容过滤关键词；缺省不过滤，禁止用目录 slug 猜测内容")
     ap.add_argument("--dry-run", action="store_true", help="只打印命令，不实际爬取")
@@ -416,7 +484,9 @@ def main():
     validate_account_slug(a.account)
     a.mc_py, mc_root = resolve_mc()
     parent_root = a.root
-    a.root = make_run_dir(parent_root, a.account, a.run_dir)
+    if a.run_dir and a.new_run:
+        sys.exit("[ERR] --run-dir 与 --new-run 不能同时使用")
+    a.root = make_run_dir(parent_root, a.account, a.run_dir, a.new_run)
     identity_path = bind_account_identity(a.root, a.account, a.mode, a.target, dry_run=a.dry_run)
     a.save_dir = validate_save_dir(a.root, a.account, a.save_dir)
     os.makedirs(os.path.join(a.save_dir, "cursor"), exist_ok=True)

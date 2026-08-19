@@ -11,7 +11,7 @@
 
 ## 路径与命名
 
-- `--root` 首次表示运行目录父目录；`crawl.py` 创建 `<root>/<account>-YYYYMMDD-HHMMSS/` 和 `.douyin-crawl-run.json` 后，该目录是整轮唯一工作根。后续 `crawl.py` 评论/续跑用 `--run-dir` 复用；其他工具把它作为 `--root`。已有运行根不得嵌套创建新时间戳目录。
+- `--root` 首次表示父目录；父目录通过 `.douyin-crawl-current-<account>.json` 为所有 Agent 共享当前运行根。默认复用，只有用户明确要求新一轮时用 `--new-run`。创建过程有账号级锁；不得在运行根内嵌套时间戳目录。
 - `--account` 只用于目录命名，不参与视频内容过滤；视频唯一性始终按 `aweme_id` 判断。
 - 每个账号必须使用唯一 `--account` slug。`crawl.py` 在 `<root>/accounts/<slug>.json` 记录并绑定 creator `sec_uid`；同一 slug 指向另一个账号时立即拒绝。
 - `process.py` 自动读取当前 `crawl_<account>/douyin/jsonl/`；旧共享目录所有权不明确，必须显式传 `--json`。

@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.6.3-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.6.4-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -56,7 +56,7 @@ flowchart LR
 
 | 阶段 | 工具 | 亮点 |
 |---|---|---|
-| 抓取 | `crawl.py` | 每轮采集只创建一个运行目录；后续评论/续跑自动复用，不再生成嵌套时间戳目录；默认每视频抓取 100 条一级评论 |
+| 抓取 | `crawl.py` | 父目录保存当前运行指针，跨 Agent 的主页、评论和续跑都集中到同一目录；只有 `--new-run` 开启新一轮 |
 | 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，只跑增量不重复劳动 |
 | 下载 | `download.py` | 多线程并行，并发按机器自适应 |
 | 画面分析 | `extract_frames.py` + `analyze_frames.py` | 最低 12 点 + 首三秒/镜头突变/低置信度加密，自动聚合画风、色彩、构图、场景、字幕与产品露出候选 |
@@ -113,6 +113,9 @@ python tools/extract_frames.py --root <根> --account <slug>
 python tools/transcribe.py --root <根> --account <slug> --map term_map.json
 # ③ 评论洞察 + 单视频拆解 + 账号聚合
 python tools/crawl.py --run-dir <本次运行目录> --root <父目录> --account <slug> --mode detail --target "<id1>,<id2>..."
+
+# 确认要为同一账号开始全新一轮时才使用
+python tools/crawl.py --root <父目录> --account <slug> --mode creator --target "<sec_uid>" --new-run
 # 抓取结束后，把控制台打印的“本次运行目录”作为后续命令的 --root
 python tools/comments.py --root <根> --account <slug>
 python tools/decompose_prep.py --root <根> --account <slug>
@@ -226,6 +229,7 @@ douyin-crawl-report/
 
 ## 更新日志
 
+- **v0.6.4（2026-08-19）**：根据多 Agent 真实产物目录回归优化；父目录新增当前运行指针和跨 Agent 创建锁，默认自动复用最近有效运行根，只有 `--new-run` 才新建，避免同级/嵌套空目录与重复日志。
 - **v0.6.3（2026-08-19）**：修复评论补抓和续跑重复创建嵌套时间戳目录；新增运行根标记，整轮采集统一复用一个目录、一份 `run.log` 和一份 `run-state.json`。
 - **v0.6.2（2026-08-19）**：建立中文发布规范；Git Commit 信息必须使用中文，每次提交必须同步更新 README 的版本或更新日志。
 - **v0.6.1（2026-08-19）**：修复抖音主页 `--max` 不截断问题，达到指定数量后停止翻页，并对最终 JSONL 二次硬截断。
