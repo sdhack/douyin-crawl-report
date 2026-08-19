@@ -149,10 +149,10 @@ python tools/report_html.py --root <根> --account <slug> --title "抖音{品类
 - **封面/关键帧自动内联**真实素材（超限跳过、缺源如实标注），内置标签平衡/锚点**结构自检**；
 - 评论/BGM/关键帧/逐字稿任一缺源 → 对应章节自动省略并在附言声明，**禁止虚构**。
 
-`render_report.py` 仅用于**博主全量视频总结 / decompose 长文**（自由 md + 8 套视觉主题随机轮换，`--theme-seed` 复现）：
+`render_report.py` 仅用于**博主全量视频总结 / decompose 长文**，三条硬性约束：**默认单栏无目录**、**图片「相册网格」两两成排、限高 460px 不突兀**、**骨架全局恒定、仅 `--design` 换设计美学**（不做随机轮换）：
 
 ```bash
-python tools/render_report.py --source 博主总结.md --inline --theme-seed 7   # 固定种子复现
+python tools/render_report.py --source 博主总结.md --inline --design '{"bg":"#f6f3ee","ink":"#252019","acc":"#c05a2e","serif":"...","radius":"16px","shadow":"..."}'   # AI 定制整套美学，无目录单栏
 ```
 
 ---
