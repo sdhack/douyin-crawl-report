@@ -46,7 +46,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 - `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 打 `MC_COMMENTS_COUNT` env 补丁（自动备份 `.bak`）突破，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
 - 评论模式产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，输出 `comments.py` 下一阶段命令。
 
-产物：`<run-root>/crawl_<account>/`（原始 jsonl + `<account>_dedup.jsonl` 过滤去重 + crawl.log）。下一阶段命令中的 `--root` 使用控制台打印的本次运行目录。
+产物：`<run-root>/crawl_<account>/` 与运行目录根的 `run.log`、`run-state.json`。每分钟追加进度；续跑时把同一目录传给 `--run-dir`。
 
 ## MediaCrawler 抓取（底层参考，一般不直接手敲）
 
@@ -85,8 +85,9 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `tools/patch_mediacrawler.py` | `python tools/patch_mediacrawler.py [<client.py>]` | 给 MediaCrawler 打断点续传补丁（一次性） |
 | `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
 | `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
-| `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--workers 4]` | PyAV 抽帧（多进程并行，默认 min(CPU核,4)） |
 | `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 从 JSON 的 `music_download_url` 下载/复用音频后转写，不从 MP4 分离；`needs_visual_review=true` 时结合画面字幕核验 |
+| `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--review-fps 5] [--scene-threshold 0.18]` | 自适应抽帧：基础采样、镜头突变补帧、低置信度视频加密；可按 `frames.json` 断点跳过 |
+| `tools/analyze_frames.py` | `python tools/analyze_frames.py --root <root> --account <slug>` | 逐帧时间轴分析与 OCR；无 Tesseract 时明确标记 unavailable |
 | `tools/transcribe_bgm.py` | `python tools/transcribe_bgm.py --root <root> --account <slug> [--workers 2] [--device auto] [--compute auto]` | 读取 JSON 的 `music_download_url` 直下并分析（不从 MP4 分离，缺源失败）→ `<root>/bgm/<account>/audio/` 与归档 JSON |
 | `tools/bgm_cross.py` | `python tools/bgm_cross.py --root <root> --account <slug> [--top 10]` | BGM×互动交叉（按 bgm_level/mood/vocal 分组算均赞/均藏/均享 + 爆款明细）→ `<root>/bgm/<account>/_cross.json` |
 | `tools/comments.py` | `python tools/comments.py --root <root> --account <slug> [--max 100]` | 评论聚合（`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N）→ `<root>/video-analysis/<account>/comments.json` |

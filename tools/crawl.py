@@ -37,6 +37,7 @@ try:
 except Exception:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import runtime
+from run_progress import RunProgress
 
 PLATFORM = "dy"  # 抖音 固定
 _MODES = ("creator", "detail", "search")
@@ -102,8 +103,7 @@ def make_run_dir(parent, slug, explicit=None):
     """Create a unique self-contained workspace for one crawl invocation."""
     if explicit:
         path = os.path.abspath(explicit)
-        if os.path.exists(path) and os.listdir(path):
-            sys.exit(f"[ERR] --run-dir 已存在且非空，拒绝混入历史内容：{path}")
+        # Explicit run directories are resume targets. Identity binding below prevents cross-account mixing.
     else:
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}")
@@ -212,7 +212,7 @@ def build_cmd(a, mc_root):
     return cmd
 
 
-def tee_run(py, main_args, mc_root, log_path, env, timeout=None):
+def tee_run(py, main_args, mc_root, log_path, env, timeout=None, progress=None):
     """流式执行：逐行回显到控制台 + 写入日志。返回退出码。
 
     timeout=None 时不限时（长任务不误杀）；给定秒数则超时后 terminate 并返回 -9。
@@ -231,13 +231,15 @@ def tee_run(py, main_args, mc_root, log_path, env, timeout=None):
     errors = []
 
     def pump():
-        with open(log_path, "w", encoding="utf-8") as lf:
+        with open(log_path, "a", encoding="utf-8") as lf:
             try:
                 for line in proc.stdout:
                     ts = datetime.datetime.now().strftime("%H:%M:%S")
                     sys.stdout.write(line)
                     sys.stdout.flush()
                     lf.write(f"[{ts}] {line}")
+                    if progress:
+                        progress.observe(line.strip()[:240])
             except Exception as e:
                 errors.append(str(e))
 
@@ -319,7 +321,7 @@ def main():
     ap.add_argument("--max-min", type=float, default=None,
                     help="单次抓取最大运行分钟数（防子进程永久挂起；缺省不限时，长任务不误杀）")
     ap.add_argument("--no-mc-patch", action="store_true", help="不修改 MediaCrawler 源码（仅改用并发提速，随机延时参数失效）")
-    ap.add_argument("--run-dir", default=None, help="指定本次独立运行目录（必须为空或不存在）")
+    ap.add_argument("--run-dir", default=None, help="指定本次运行目录；已存在时校验账号身份并断点续跑")
     ap.add_argument("--save-dir", dest="save_dir", default=None, help="高级覆盖：仅改变 MediaCrawler 原始数据目录")
     ap.add_argument("--account-filter", dest="kw", default=None, help="可选内容过滤关键词；缺省不过滤，禁止用目录 slug 猜测内容")
     ap.add_argument("--dry-run", action="store_true", help="只打印命令，不实际爬取")
@@ -383,6 +385,8 @@ def main():
         return
 
     log_path = os.path.join(a.save_dir, "crawl.log")
+    progress = RunProgress(a.root, "crawl").heartbeat()
+    progress.log(f"运行目录={a.root} account={a.account} mode={a.mode} target={a.target}")
     print(f"[日志] {log_path}")
 
     # —— 失败自动重试（指数退避：5s→10s→20s→...→封顶60s）———
@@ -394,7 +398,8 @@ def main():
             print(f"[随机延时] 第 {i} 次尝试重随机 MC_SLEEP_SEC={env['MC_SLEEP_SEC']}s")
         print(f"[尝试 {i}/{attempts}]")
         timeout = a.max_min * 60 if a.max_min else None
-        rc = tee_run(a.mc_py, cmd[1:], mc_root, log_path, env, timeout=timeout)
+        progress.detail(f"MediaCrawler 尝试 {i}/{attempts}")
+        rc = tee_run(a.mc_py, cmd[1:], mc_root, log_path, env, timeout=timeout, progress=progress)
         print(f"[退出码] {rc}")
         if rc == 0:
             break
@@ -405,6 +410,7 @@ def main():
 
     # Never process stale or partial output after a crawler failure.
     if rc != 0:
+        progress.finish(False, f"MediaCrawler 失败，退出码={rc}")
         print(f"[停止] MediaCrawler 退出码 {rc}；不执行任何兜底方案。请修复 MediaCrawler 后重试。")
         sys.exit(rc or 1)
 
@@ -419,11 +425,13 @@ def main():
         print(f"[评论产物] {len(cps)} 个 detail_comments_*.jsonl：")
         for f in sorted(cps):
             print("  " + f)
+        progress.finish(True, f"评论抓取完成：文件={len(cps)}")
         print(f"[下一阶段] runtime.py run --tool comments.py --root \"{a.root}\" --account \"{a.account}\" --max {a.comments_count}")
         sys.exit(0)
 
     raw = newest_raw(a.save_dir)
     if not raw:
+        progress.finish(False, "抓取结束但未发现 contents JSONL")
         print("[提示] save_dir 下未发现 *_contents*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
         sys.exit(rc or 1)
 
@@ -431,6 +439,7 @@ def main():
     kw = a.kw
     filtered = os.path.join(a.save_dir, f"{a.account}_dedup.jsonl")
     counts = filter_dedup(raw, filtered, kw)
+    progress.finish(bool(counts["unique"]), f"抓取完成：原始={counts['total']} 唯一={counts['unique']}")
     print("=" * 70)
     print(f"[原始文件] {raw}")
     print(f"[去重文件] {filtered}")

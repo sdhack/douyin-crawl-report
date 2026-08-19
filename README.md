@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.4.8-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.5.0-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -59,8 +59,8 @@ flowchart LR
 | 抓取 | `crawl.py` | 每次调用自动新建独立运行目录；账号主页 / 单视频 / 搜索全模式；默认每视频抓取 100 条一级评论；`--no-comment` 可显式跳过；断点续传、并发档、随机延时与失败重试 |
 | 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，只跑增量不重复劳动 |
 | 下载 | `download.py` | 多线程并行，并发按机器自适应 |
-| 抽帧 | `extract_frames.py` | PyAV 1fps，**多进程并行 3.5× 提速** |
-| 口播转写 | `transcribe.py` | 直接复用抓取 JSON 的音乐音频 URL；低置信度标记后再结合画面字幕核验 |
+| 画面分析 | `extract_frames.py` + `analyze_frames.py` | 基础 1 FPS + 镜头突变补帧 + 低置信度 5 FPS，生成逐帧指标与 OCR 时间轴 |
+| 口播转写 | `transcribe.py` | 直接复用抓取 JSON 的音乐音频 URL；低置信度标记后再结合自适应抽帧字幕核验 |
 | BGM 分析 | `transcribe_bgm.py` | 复用同一音频缓存做能量包络与情绪分析，不再从 MP4 分离音频 |
 | 评论洞察 | `crawl.py` → `comments.py` | 批量补抓评论，按赞聚合截断，进档案做需求洞察 |
 | 单视频拆解 | `decompose_prep.py` | 标题/时长/时间/互动/口播/帧/BGM/评论全维度档案 + 18 字段标准化标签 |
@@ -184,7 +184,8 @@ douyin-crawl-report/
 │  ├─ probe.py               资源自适应调度（CPU/GPU/内存）
 │  ├─ process.py             去重 → manifest
 │  ├─ download.py            多线程下载视频+封面
-│  ├─ extract_frames.py      PyAV 多进程 1fps 抽帧
+│  ├─ extract_frames.py      PyAV 多进程自适应抽帧
+│  ├─ analyze_frames.py      逐帧指标与 OCR 时间轴
 │  ├─ transcribe.py          faster-whisper GPU 转写 + --map 纠错
 │  ├─ transcribe_bgm.py      BGM 强度/情绪归档 + ×互动交叉
 │  ├─ comments.py            评论聚合（按赞截断去重）
