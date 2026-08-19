@@ -15,7 +15,7 @@
 
 ## 阶段 1：抓取（crawl.py）
 
-每次抓取都会在 `--root` 指定的父目录下新建 `<account>-YYYYMMDD-HHMMSS/` 运行目录。抓取结束后，以控制台打印的“本次运行目录”作为后续 `process.py`、`download.py`、`analyze.py` 和报告命令的 `--root`，确保一轮任务的所有文件集中在同一个文件夹。
+每轮采集首次调用会在 `--root` 父目录下新建一个 `<account>-YYYYMMDD-HHMMSS/` 运行目录并写 `.douyin-crawl-run.json`。本轮后续评论补抓用 `--run-dir <本次运行目录>`，其他工具直接用该目录作为 `--root`。工具识别已有运行根后会自动复用，绝不在其中再次创建时间戳子目录。
 
 ### 单个视频（detail 模式）
 

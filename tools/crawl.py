@@ -99,19 +99,60 @@ def bind_account_identity(root, slug, mode, target, dry_run=False):
     return meta_path
 
 
+def _run_marker(path):
+    return os.path.join(path, ".douyin-crawl-run.json")
+
+
+def _existing_run(path, slug):
+    """Return True when path is an existing run root for this account."""
+    marker = _run_marker(path)
+    identity = os.path.join(path, "accounts", slug + ".json")
+    account_files = glob.glob(os.path.join(path, "accounts", "*.json"))
+    if not (os.path.isfile(marker) or account_files):
+        return False
+    if os.path.isfile(marker):
+        try:
+            data = json.load(open(marker, encoding="utf-8"))
+        except Exception as e:
+            sys.exit(f"[ERR] 运行目录标记损坏：{marker} ({e})")
+        if data.get("account") != slug:
+            sys.exit(f"[ERR] 运行目录属于账号 {data.get('account')}，不能用于 {slug}。")
+    elif not os.path.isfile(identity):
+        owners = ", ".join(os.path.splitext(os.path.basename(p))[0] for p in account_files)
+        sys.exit(f"[ERR] 旧运行目录属于账号 {owners}，不能用于 {slug}。")
+    return True
+
+
+def _write_run_marker(path, slug):
+    marker = _run_marker(path)
+    if os.path.exists(marker):
+        return
+    with open(marker, "w", encoding="utf-8") as f:
+        json.dump({"type": "douyin-crawl-report-run", "account": slug,
+                   "created_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")},
+                  f, ensure_ascii=False, indent=2)
+
+
 def make_run_dir(parent, slug, explicit=None):
-    """Create a unique self-contained workspace for one crawl invocation."""
+    """Create a run root once, or reuse it when a later phase passes that root back."""
     if explicit:
         path = os.path.abspath(explicit)
-        # Explicit run directories are resume targets. Identity binding below prevents cross-account mixing.
+        os.makedirs(path, exist_ok=True)
+        if os.listdir(path) and not _existing_run(path, slug):
+            sys.exit(f"[ERR] --run-dir 已存在但不是账号 {slug} 的运行目录：{path}")
     else:
+        parent = os.path.abspath(parent)
+        if os.path.isdir(parent) and _existing_run(parent, slug):
+            _write_run_marker(parent, slug)
+            return parent
         stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}")
+        path = os.path.join(parent, f"{slug}-{stamp}")
         suffix = 2
         while os.path.exists(path):
             path = os.path.join(os.path.abspath(parent), f"{slug}-{stamp}-{suffix}")
             suffix += 1
     os.makedirs(path, exist_ok=True)
+    _write_run_marker(path, slug)
     return path
 
 
@@ -338,7 +379,7 @@ def filter_dedup(raw, out, keyword, hard_limit=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--root", required=True, help="运行目录父目录；每次抓取自动新建独立子目录")
+    ap.add_argument("--root", required=True, help="首次为父目录；若指向已有运行目录则自动复用，禁止嵌套新建")
     ap.add_argument("--account", required=True, help="账号唯一 slug，如 brand-001；不同账号不得复用")
     ap.add_argument("--mode", choices=_MODES, required=True, help="creator=账号全量 / detail=单条 / search=关键词")
     ap.add_argument("--target", required=True, help="creator: sec_uid；detail: aweme_id/URL；search: 关键词")

@@ -35,7 +35,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 
 ```bat
 REM 批量补评论：并发=2、每次抓取延时随机取 [3,8]s、失败自动重试2次(指数退避)
-py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode detail --get-comment --target "<id1>,<id2>,..." --max 100 --speed normal --sleep-min 3 --sleep-max 8 --retry-fail 2
+py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <父目录> --run-dir <本次运行目录> --account <slug> --mode detail --get-comment --target "<id1>,<id2>,..." --max 100 --speed normal --sleep-min 3 --sleep-max 8 --retry-fail 2
 REM 只想并发提速、不改 MediaCrawler 源码延时（涉及 base_config 时）
 py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug> --mode detail --get-comment --target "<id1>,<id2>..." --speed fast --no-mc-patch
 ```
@@ -46,7 +46,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 - `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 打 `MC_COMMENTS_COUNT` env 补丁（自动备份 `.bak`）突破，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
 - 评论模式产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，输出 `comments.py` 下一阶段命令。
 
-产物：`<run-root>/crawl_<account>/` 与运行目录根的 `run.log`、`run-state.json`。每分钟追加进度；续跑时把同一目录传给 `--run-dir`。
+产物：`<run-root>/crawl_<account>/` 与运行目录根唯一的 `run.log`、`run-state.json`。首次调用创建 `.douyin-crawl-run.json`；评论补抓和续跑使用 `--run-dir <run-root>`。即使误把 `<run-root>` 传给 `--root`，工具也会识别并复用，不创建嵌套目录。
 
 ## MediaCrawler 抓取（底层参考，一般不直接手敲）
 
@@ -82,7 +82,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 
 | 脚本 | 命令 | 产出 |
 |---|---|---|
-| `tools/crawl.py` | `runtime.py run --tool crawl.py --root <parent> --account <slug> --mode creator\|detail\|search --target <sec_uid\|aweme_id\|关键词> [--max N] [--comments-count 100\|--no-comment] [--speed safe\|normal\|fast\|--concurrency N] [--sleep-min F --sleep-max F] [--retry-fail N] [--no-mc-patch] [--lt cookie --cookies "…"] [--dry-run]` | 默认抓每视频最多 100 条评论；每次创建 `<parent>/<slug>-时间戳/`，后续产物均在该运行目录内 |
+| `tools/crawl.py` | `runtime.py run --tool crawl.py --root <parent> [--run-dir <run-root>] --account <slug> --mode creator\|detail\|search --target <目标> ...` | 首次创建一个 `<parent>/<slug>-时间戳/`；评论、重试、续跑复用同一运行根，不再嵌套创建目录 |
 | `tools/patch_mediacrawler.py` | `python tools/patch_mediacrawler.py [<client.py>]` | 给 MediaCrawler 打断点续传补丁（一次性） |
 | `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
 | `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
