@@ -59,19 +59,20 @@
 
 ## 阶段 4：报告生成（report_html.py，v2 固定骨架直出 HTML）
 
-对标分析报告走**数据驱动固定骨架**：骨架/视觉/图标固化在 `tools/report_html.py`，**全部统计数字由工具实时计算**，AI 只写定性 `narrative.json`（槽位 schema 见 `references/report-template.md`）：
+对标分析报告走**数据驱动固定骨架**：骨架/统计/图表/真图固化在 `tools/report_html.py`，**全部统计数字由工具实时计算、多枚 SVG 图表自动生成**（周发布分布/月度趋势/主题环形/点赞分布/BGM 对比/情绪分布），AI 只写定性 `narrative.json`（槽位 schema 与视觉 token 见 `references/report-template.md`）。**设计美学完全由 AI 决定**：AI 在 narrative 的 `design` 键给出整套配色/圆角/阴影/字体，缺键回落高可读性基线，避免每次报告雷同：
 
 ```powershell
 # 1) AI 按 report-template.md v2 槽位撰写（定性结论/口号/金句/方案；统计数字一律留空由工具算）
-#    落 <root>/video-analysis/<account>/narrative.json
+#    并在 narrative.json 的 "design" 键给出套装视觉 token（每份报告主动换一套）
 # 2) 一步生成 + 内置结构自检（标签平衡/锚点；失败即退出非零码）
 py -3 <skill>\tools\runtime.py run --tool report_html.py --root <root> --account <slug> `
     --title "抖音{品类}达人对标分析报告" --subtitle "「{账号}」账号拆解与差异化起号方案" `
-    --narrative <root>\video-analysis\<slug>\narrative.json --out "{账号}-对标分析报告.html"
+    --narrative <root>\video-analysis\<slug>\narrative.json --out "{账号}-对标分析报告.html" `
+    [--design '<json>']   # 可选：临时覆盖视觉 token（优先级高于 narrative.design）
 ```
 
 - 封面/关键帧自动内联（真实素材、超 400KB 跳过、缺源如实标注）；评论/BGM/关键帧/逐字稿任一缺源时对应章节自动省略并在附言声明。
-- `--top-n`(默认10) 控爆款榜行数、`--frames-n`(默认6) 控关键帧切片数。
+- `--top-n`(默认10) 控爆款榜行数、`--frames-n`(默认8) 控关键帧切片数。
 - **`render_report.py` 不再渲染对标报告**（已收口防双路径），仅用于阶段 4c 博主全量视频总结。
 
 ## 阶段 4b：单视频逆向拆解 + 账号总结

@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.3.0-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.4.0-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -26,7 +26,7 @@ flowchart LR
     F --> G
     E --> G
     G --> H["⑧ 账号聚合 account_metrics.py<br/>发布节奏 · 互动聚类 · 话题 + 高赞评论"]
-    H --> I["⑨ 对标报告 report_html.py<br/>v2 固定骨架 · 数据全自动 · 叙事分离"]
+    H --> I["⑨ 对标报告 report_html.py<br/>v2 固定骨架 · 多图表 · 美学由 AI 决定"]
     H --> J["⑩ 博主总结 render_report.py<br/>自由 md · 8 套主题随机"]
     I -.->|下一账号| A
     J -.->|下一账号| A
@@ -65,7 +65,7 @@ flowchart LR
 | 评论洞察 | `crawl.py` → `comments.py` | 批量补抓评论，按赞聚合截断，进档案做需求洞察 |
 | 单视频拆解 | `decompose_prep.py` | 标题/时长/时间/互动/口播/帧/BGM/评论全维度档案 + 18 字段标准化标签 |
 | 账号聚合 | `account_metrics.py` | 自动产出 **发布节奏 · 互动交叉聚类 · 话题策略 + 高赞评论** 三维度，博主总结必吃 |
-| 对标报告 | `report_html.py` | **v2 固定骨架直出 HTML**（10 区结构 + 图标系统）：统计数字全部由工具从管线产物实时计算，AI 只写定性 `narrative.json`，封面/关键帧自动内联，内置结构自检 |
+| 对标报告 | `report_html.py` | **v2 固定骨架直出 HTML**（10 区结构 + 图标系统）：统计数字全部由工具从管线产物实时计算，**多枚 SVG 图表自动生成**（周发布分布/月度趋势/主题环形/点赞分布/BGM 对比/情绪分布）+ 各主题代表帧画廊；**设计美学完全由 AI 决定**（narrative 的 `design` 键给出整套配色/圆角/阴影/字体 token，缺键回落到高可读性基线，反色文字自动推导保证任何配色可读）；封面/关键帧自动内联，内置结构自检 |
 | 博主总结 | `render_report.py` | 自由 md → 自包含 HTML 渲染器（8 套视觉主题随机轮换），用于账号级总结/decompose 长文，**不渲染对标报告** |
 
 ---

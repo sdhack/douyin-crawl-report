@@ -1,13 +1,18 @@
 # -*- coding: utf-8 -*-
 """对标分析报告 · 固定骨架 HTML 生成器（v2 模板，技能内建）。
 
-骨架与视觉系统恒定固化（对齐 references/report-template.md v2）：
+骨架恒定固化（对齐 references/report-template.md v2，10 区结构）：
   文档头(masthead+meta) → 侧栏导航 → s0 数据构成 → s1 核心结论 → s2 对标方法
   → s3 达人画像 → s4 内容矩阵 → s5 文案拆解 → s6 评论区实证 → s7 BGM×互动
   → s8 变现逻辑 → s9 起号方案 → 诚实口径附言
 所有数字实时从管线产物计算（manifest / comments / bgm _cross / frames / covers /
 transcript 目录），杜绝手写数字与数据漂移；定性结论经 --narrative JSON 提供，
 未提供的定性槽位整块省略并记入附言「缺源」，绝不虚构。
+
+设计美学完全由 AI 决定（不内置多套预设、不做随机轮换，避免千篇一律）：
+视觉写成 CSS 变量 token，AI 在 narrative.json 的 "design" 键（dict）给出整套配色/字体/
+圆角/阴影，或经 CLI --design '<json>' 传入；未给的键自动回落到高可读性基线。
+骨架与数据契约不受影响。图表与真图自动穿插，多图多图表、可读优先。
 
 图片规则：TOP 榜内联真实封面（covers/<account>/<aid>.jpg），爆款区内联真实关键帧
 （video-analysis/<account>/frames/<aid>/ 中位帧），超 --img-cap-kb(默认400KB) 自动跳过；
@@ -21,8 +26,10 @@ transcript 目录），杜绝手写数字与数据漂移；定性结论经 --nar
 import argparse
 import base64
 import json
+import math
 import os
 import re
+import sys
 from collections import Counter
 from datetime import datetime
 
@@ -107,11 +114,9 @@ def hbar(pct, label, val, color):
             '<span class="hb-v">%s</span></div>' % (label, pct, color, val))
 
 CSS = """
-:root{--ink:#241f2e;--ink-70:#4a4358;--ink-30:#a9a3b8;--paper:#faf7f4;--card:#fff;
---line:#e8e2ec;--rose:#d95f7f;--rose-bg:#fbeef2;--gold:#b98a3c;--gold-bg:#f7f0e3;
---serif:"Noto Serif SC","Source Han Serif SC","STSong","SimSun",serif}
+:root{__TOKENS__}
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;background:var(--paper);color:var(--ink);line-height:1.75}
+body{font-family:var(--sans, -apple-system,"Segoe UI","Microsoft YaHei",sans-serif);background:var(--paper);color:var(--ink);line-height:1.75}
 .page{max-width:1080px;margin:0 auto;padding:0 28px 80px}
 .ic{vertical-align:-3px}
 .masthead{padding:64px 0 36px;border-bottom:3px solid var(--ink)}
@@ -120,7 +125,7 @@ h1{font-family:var(--serif);font-size:38px;font-weight:700;letter-spacing:1px}
 .subtitle{font-family:var(--serif);font-size:17px;color:var(--ink-70);margin-top:8px;font-style:italic}
 .meta-line{display:flex;gap:22px;flex-wrap:wrap;margin-top:22px;font-size:13px;color:var(--ink-70)}
 .meta-line span{display:flex;align-items:center;gap:6px}
-nav{position:sticky;top:0;z-index:50;background:rgba(250,247,244,.95);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:12px 0;margin-bottom:36px}
+nav{position:sticky;top:0;z-index:50;background:var(--card);border-bottom:1px solid var(--line);padding:12px 0;margin-bottom:36px}
 nav .nav-in{display:flex;gap:6px;flex-wrap:wrap}
 nav a{font-size:13px;color:var(--ink-70);text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid transparent;transition:.2s}
 nav a:hover{color:var(--rose);border-color:var(--rose)}
@@ -135,9 +140,9 @@ nav a:hover{color:var(--rose);border-color:var(--rose)}
 .sample b{display:block;font-family:var(--serif);font-size:26px;margin:8px 0 2px}
 .sample small{color:var(--ink-30);font-size:12px;line-height:1.5;display:block}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin:8px 0 40px}
-.stat{background:var(--ink);color:#fff;border-radius:14px;padding:20px 18px}
+.stat{background:var(--ink);color:var(--on-ink,#fff);border-radius:14px;padding:20px 18px;box-shadow:var(--shadow,none)}
 .stat b{font-family:var(--serif);font-size:30px;display:block}
-.stat small{color:#b8b0c9;font-size:12px}
+.stat small{color:var(--on-ink-70,#b8b0c9);font-size:12px}
 section{margin-bottom:52px}
 h2{font-family:var(--serif);font-size:25px;padding-left:14px;border-left:4px solid var(--rose);margin-bottom:6px}
 .sec-sub{color:var(--ink-30);font-size:13px;margin-bottom:20px;padding-left:18px}
@@ -149,7 +154,7 @@ p{margin-bottom:12px;font-size:14.5px}
 .ki{background:var(--rose-bg);border-left:3px solid var(--rose);padding:12px 16px;border-radius:0 10px 10px 0;font-size:13.5px;margin:14px 0}
 .ki b{color:var(--rose)}
 table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px;margin:14px 0}
-th{background:var(--ink);color:#fff;padding:10px 12px;text-align:left;font-weight:500;font-size:12.5px;letter-spacing:.5px}
+th{background:var(--ink);color:var(--on-ink,#fff);padding:10px 12px;text-align:left;font-weight:500;font-size:12.5px;letter-spacing:.5px}
 td{padding:9px 12px;border-top:1px solid var(--line);vertical-align:middle}
 tr.hot td{background:var(--rose-bg)}
 td.num{font-variant-numeric:tabular-nums}
@@ -169,7 +174,7 @@ td.dim{color:var(--ink-30);font-size:12.5px}
 .q-src{font-size:11.5px;color:var(--ink-30);border-top:1px dashed var(--line);padding-top:8px}
 .hbars{margin:14px 0}
 .hbar{display:grid;grid-template-columns:110px 1fr 130px;gap:10px;align-items:center;font-size:13px;margin-bottom:9px}
-.hb-track{height:10px;background:#efeaf2;border-radius:5px;overflow:hidden}
+.hb-track{height:10px;background:var(--line);border-radius:5px;overflow:hidden}
 .hb-fill{height:100%;border-radius:5px}
 .hb-v{color:var(--ink-70);font-size:12px;text-align:right}
 .fgallery{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin:16px 0}
@@ -188,15 +193,211 @@ td.dim{color:var(--ink-30);font-size:12.5px}
 .q-like{float:right;color:var(--rose);font-size:11px}
 .steps{counter-reset:step;margin:14px 0}
 .step{display:flex;gap:16px;padding:14px 0;border-bottom:1px dashed var(--line)}
-.step::before{counter-increment:step;content:counter(step);min-width:34px;height:34px;border-radius:50%;background:var(--ink);color:#fff;display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:16px}
+.step::before{counter-increment:step;content:counter(step);min-width:34px;height:34px;border-radius:50%;background:var(--ink);color:var(--on-ink,#fff);display:flex;align-items:center;justify-content:center;font-family:var(--serif);font-size:16px}
 .step h5{font-size:14.5px;margin-bottom:3px}
 .step p{font-size:13px;color:var(--ink-70);margin:0}
 .checklist{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:14px 0}
 .checklist li{font-size:13.5px;margin:8px 0 8px 4px;list-style:none}
 .checklist li::before{content:"✓";color:var(--rose);font-weight:700;margin-right:8px}
 footer{border-top:3px solid var(--ink);padding-top:24px;font-size:12px;color:var(--ink-30);line-height:2}
-@media(max-width:900px){.samples{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.intro{grid-template-columns:1fr}.qgrid,.qcols{grid-template-columns:1fr}.fgallery{grid-template-columns:repeat(3,1fr)}.formula{grid-template-columns:1fr 1fr}}
+.chart-card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:16px 0}
+.chart-card h4{font-size:14px;margin-bottom:2px;display:flex;align-items:center;gap:7px}
+.chart-card .src{font-size:11.5px;color:var(--ink-30);margin:2px 0 12px}
+.chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 2px;font-size:12px;color:var(--ink-70)}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+svg text{font-family:var(--sans,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif)}
+/* 圆角与阴影也纳入 AI 可定制的 token（高可读性基线保证） */
+.sample,.stat,.fcell,.qcard,.fcard,.pill-box,.chart-card,.qgroup{border-radius:var(--radius,14px)}
+.chart-card,.sample,.qcard,.pill-box,.fcell{border-radius:var(--radius,14px)}
+@media(max-width:900px){.samples{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.intro{grid-template-columns:1fr}.qgrid,.qcols{grid-template-columns:1fr}.fgallery{grid-template-columns:repeat(3,1fr)}.formula{grid-template-columns:1fr 1fr}.chart-grid{grid-template-columns:1fr}}
 """
+
+# ---------------- 设计系统（骨架不变，美学完全由 AI 决定） ----------------
+# 视觉 token 写成 CSS 变量，AI 在 narrative.json 的 "design" 键（dict）或 CLI --design '<json>'
+# 里自由给定整套配色/圆角/阴影/字体；未给的键自动回落到高可读性基线 NEUTRAL_DEFAULT。
+# 不内置多套预设、不做随机轮换——每次报告的差异由 AI 撰写 narrative 时主动决定，避免千言一律。
+NEUTRAL_DEFAULT = dict(
+    ink="#20242b", ink70="#454c57", ink30="#9aa1ac", paper="#f7f8fa",
+    card="#ffffff", line="#e3e7ee", rose="#c2446f", rosebg="#fdeef3",
+    gold="#b07d2a", goldbg="#f7f0e0",
+    c1="#c2446f", c2="#3f7da6", c3="#5d8f4f", c4="#8a63c4",
+    serif='"Noto Serif SC","Source Han Serif SC","STSong","SimSun",serif',
+    sans='-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif',
+    radius="14px", shadow="0 6px 20px rgba(20,24,33,.06)",
+)
+
+def build_tokens(d):
+    return ("--ink:%(ink)s;--ink-70:%(ink70)s;--ink-30:%(ink30)s;--paper:%(paper)s;--card:%(card)s;"
+            "--line:%(line)s;--rose:%(rose)s;--rose-bg:%(rosebg)s;--gold:%(gold)s;--gold-bg:%(goldbg)s;"
+            "--c1:%(c1)s;--c2:%(c2)s;--c3:%(c3)s;--c4:%(c4)s;"
+            "--on-ink:%(on_ink)s;--on-ink-70:%(on_ink_70)s;"
+            "--serif:%(serif)s;--sans:%(sans)s;--radius:%(radius)s;--shadow:%(shadow)s") % d
+
+def full_css(design):
+    return CSS.replace("__TOKENS__", build_tokens(design))
+
+def _luminance(hexcolor):
+    h = (hexcolor or "#20242b").lstrip("#")
+    try:
+        r, g, b = [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    except ValueError:
+        return 0
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+def resolve_design(nar, args):
+    """骨架恒定；视觉 token 完全由 AI 决定。来源优先级：--design <JSON dict> > narrative.design(dict) > 可读性基线。
+    额外保证可读性：按 ink 亮度自动推导 stat/th/step 等深色底上的反色文字 token（AI 可覆盖）。"""
+    base = dict(NEUTRAL_DEFAULT)
+    spec = getattr(args, "design", None)
+    if spec:
+        try:
+            spec = json.loads(spec)
+        except Exception:
+            sys.stderr.write("[report_html] 无法解析 --design 为 JSON，已忽略改用 narrative.design/默认值。\n")
+            spec = None
+    if not spec and isinstance(nar, dict):
+        spec = nar.get("design")
+    if isinstance(spec, dict):
+        allowed = set(NEUTRAL_DEFAULT) | {"on_ink", "on_ink_70"}
+        base.update({k: v for k, v in spec.items() if k in allowed})
+    dark = _luminance(base["ink"]) < 150
+    base.setdefault("on_ink", "#ffffff" if dark else "#13151b")
+    base.setdefault("on_ink_70", "#bfc9e0" if dark else "#58606d")
+    return base
+
+# ---------------- 自动计算 SVG 图表（全部数据来自管线产物，绝不手写） ----------------
+def svg_chart(body, w, h, title, src, extra_legend=""):
+    return ('<div class="chart-card"><h4>%s</h4><div class="src">%s</div>%s'
+            '<svg viewBox="0 0 %d %d" width="100%%" role="img">%s</svg></div>'
+            % (title, src, extra_legend, w, h, body))
+
+def chart_weekday(wds):
+    names = "一二三四五六日"
+    seq = [wds.get(i, 0) for i in range(7)]
+    if not any(seq):
+        return ""
+    mx = max(seq) or 1
+    bars, gap = "", (620 - 34 * 7) / 6.0
+    for i, v in enumerate(seq):
+        bx = 10 + i * (34 + gap)
+        bh = (96) * v / mx
+        by = 118 - bh
+        peak = ' var(--rose)' if v == mx else ''
+        bars += ('<rect x="%.0f" y="%.1f" width="34" height="%.1f" rx="5" fill="var(--c%s)%s">'
+                 '<title>周%s · %d 条</title></rect>'
+                 % (bx, by, bh, 1, peak, names[i], v))
+        bars += ('<text x="%.0f" y="%d" font-size="11" fill="var(--ink-30)" text-anchor="middle">%s</text>'
+                 % (bx + 17, 132, names[i]))
+    return svg_chart(bars, 640, 140, "周发布分布", "数据：manifest create_time·weekday", "")
+
+def chart_month_trend(man):
+    cnt, likes = Counter(), {}
+    for m in man:
+        k = datetime.fromtimestamp(m["create_time"]).strftime("%Y-%m")
+        cnt[k] += 1
+        likes.setdefault(k, 0)
+        likes[k] += m.get("likes", 0)
+    if not cnt:
+        return ""
+    ks = sorted(cnt)
+    if len(ks) < 2:
+        return ""
+    mx = max(cnt.values()) or 1
+    bars, pts = "", []
+    n = len(ks)
+    bw = (636 - 30) / n
+    step = 1 if n <= 18 else (n + 17) // 18
+    for i, k in enumerate(ks):
+        bx = 20 + i * bw
+        bh = 74 * cnt[k] / mx
+        by = 112 - bh
+        bars += ('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" fill="var(--ink-30)">'
+                 '<title>%s · %d 条</title></rect>' % (bx, by, max(bw - 4, 2), bh, k, cnt[k]))
+        if i % step == 0 or i == n - 1:
+            bars += ('<text x="%.1f" y="130" font-size="9" fill="var(--ink-30)" text-anchor="middle">%s</text>'
+                     % (bx + bw / 2, k[2:]))
+        avg = likes[k] / cnt[k]
+        pts.append((bx + bw / 2, 108 - min(avg / (sum(likes.values()) / max(len(likes), 1) * 3), 1) * 60))
+    ln = "".join('L%.1f %.1f' % p for p in pts[1:])
+    poly = '<path d="M%.1f %.1f %s" fill="none" stroke="var(--rose)" stroke-width="2.5"/>' % (pts[0][0], pts[0][1], ln)
+    dots = "".join('<circle cx="%.1f" cy="%.1f" r="3" fill="var(--rose)"/>' % p for p in pts)
+    legend = '<div class="legend"><span><i style="background:var(--ink-30)"></i>发布条数</span>' \
+             '<span><i style="background:var(--rose)"></i>均赞(右轴·相对)</span></div>'
+    return svg_chart(bars + poly + dots, 660, 140, "月度发布趋势 × 均赞", "数据：manifest.create_time", legend)
+
+def chart_likes_hist(man):
+    bins = [0, 100, 1000, 10000, 100000, 1000000]
+    labels = ["<100", "100–1k", "1k–1万", "1万–10万", "10万+"]
+    cnt = [0] * (len(bins) - 1)
+    for m in man:
+        lk = m.get("likes", 0)
+        for i in range(len(bins) - 2, -1, -1):
+            if lk > bins[i] and lk <= bins[i + 1]:
+                cnt[i] += 1
+                break
+        else:
+            cnt[-1] += 1
+    if not any(cnt):
+        return ""
+    mx = max(cnt) or 1
+    bars = ""
+    for i, v in enumerate(cnt):
+        bx = 30 + i * 118
+        bh = 90 * v / mx
+        by = 106 - bh
+        bars += ('<rect x="%d" y="%.1f" width="88" height="%.1f" rx="5" fill="var(--c1)">'
+                 '<title>%s · %d 条</title></rect>' % (bx, by, bh, labels[i], v))
+        bars += ('<text x="%d" y="124" font-size="10" fill="var(--ink-30)" text-anchor="middle">%s</text>'
+                 % (bx + 44, labels[i]))
+    return svg_chart(bars, 620, 132, "点赞量分布（对数分箱）", "数据：manifest.likes", "")
+
+def chart_theme_donut(tstat, order):
+    items = [(k, v["n"]) for k, v in tstat.items() if k in order and v["n"] > 0]
+    if not items:
+        return ""
+    tot = sum(v for _, v in items)
+    cols = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--ink-30)", "var(--rose-bg)"]
+    r, off = 72, 0.0
+    dash = ""
+    for i, (label, v) in enumerate(items):
+        frac = v / tot
+        cyc = 2 * math.pi * r
+        d = cyc * frac
+        dash += ('<circle cx="84" cy="84" r="%d" fill="none" stroke="%s" stroke-width="26" '
+                 'stroke-dasharray="%.1f %.1f" stroke-dashoffset="%.1f" transform="rotate(-90 84 84)">'
+                 '<title>%s · %d 条 · %.1f%%</title></circle>'
+                 % (r, cols[i % len(cols)], d, cyc - d, -off, label, v, frac * 100))
+        off += d
+    mid = '<text x="84" y="80" font-size="22" font-weight="700" fill="var(--ink)" text-anchor="middle">%d</text>' % tot
+    mid += '<text x="84" y="98" font-size="11" fill="var(--ink-30)" text-anchor="middle">条全量</text>'
+    legend = '<div class="legend">' + "".join(
+        '<span><i style="background:%s"></i>%s · %d条(%.0f%%)</span>' % (cols[i % len(cols)], label, v, v * 100.0 / tot)
+        for i, (label, v) in enumerate(items)) + '</div>'
+    return svg_chart(mid + dash, 168, 168, "内容主题占比", "数据：manifest.title 主题规则", legend)
+
+def chart_bgm_compare(L):
+    keys = [k for k in ("none", "light", "full") if k in L]
+    if len(keys) < 2:
+        return ""
+    labels = {"none": "无BGM", "light": "轻BGM", "full": "强BGM"}
+    rows = [(labels[k], L[k].get("avg_likes", 0), L[k].get("avg_collects", 0), L[k].get("avg_shares", 0)) for k in keys]
+    cols = ["var(--c1)", "var(--c2)", "var(--c3)"]
+    mx = max(max(r[1:]) for r in rows) or 1
+    bars, gx = "", 36
+    for gi, (name, a, b, c) in enumerate(rows):
+        bx = gx + gi * 132
+        for m, (val, ci) in enumerate([(a, 0), (b, 1), (c, 2)]):
+            bh = 60 * val / mx
+            by = 96 - bh
+            bars += ('<rect x="%d" y="%.1f" width="30" height="%.1f" rx="3" fill="%s">'
+                     '<title>%s · %d</title></rect>' % (bx + m * 36, by, bh, cols[ci], name, int(val)))
+        bars += ('<text x="%d" y="112" font-size="11" fill="var(--ink-30)" text-anchor="middle">%s</text>'
+                 % (bx + 54, name))
+    legend = '<div class="legend">' + "".join(
+        '<span><i style="background:%s"></i>%s</span>' % (cols[i], lbl)
+        for i, lbl in enumerate(["均赞", "均藏", "均转"])) + '</div>'
+    return svg_chart(bars, 436, 120, "BGM 强度 × 互动对比", "数据：_cross.json", legend)
 
 def load_json(path):
     return json.load(open(path, encoding="utf-8")) if path and os.path.isfile(path) else None
@@ -210,6 +411,7 @@ def count_transcripts(root, account):
 def build(args):
     root, acc = args.root, args.account
     nar = load_json(args.narrative) or {}
+    design = resolve_design(nar, args)
 
     man_p = os.path.join(root, "video-analysis", acc, "manifest.json")
     man = load_json(man_p)
@@ -348,13 +550,15 @@ def build(args):
         bh = v / hmax * 100
         color = "var(--gold)" if v == hmax else "var(--rose)" if v >= hmax * 0.6 else "var(--ink-30)"
         hour_svg += ('<rect x="%d" y="%.1f" width="16" height="%.1f" rx="3" fill="%s"><title>%d:00 · %d条</title></rect>'
-                     '<text x="%d" y="124" text-anchor="middle" font-size="8" fill="#8a8494">%d</text>'
+                     '<text x="%d" y="124" text-anchor="middle" font-size="8" fill="var(--ink-30)">%d</text>'
                      % (h * 25 + 8, 110 - bh * 0.9, bh * 0.9, color, h, v, h * 25 + 16, h))
     wd_names = "一二三四五六日"
     peak_wd, low_wd = max(wds, key=wds.get), min(wds, key=wds.get)
     peak_h = max(hours, key=hours.get) if hours else 0
     s3_auto = ("发布高峰 %d 点档（%d 条），周%s 最勤（%d 条）、周%s 最少（%d 条）。"
                % (peak_h, hours[peak_h], wd_names[peak_wd], wds[peak_wd], wd_names[low_wd], wds[low_wd]))
+    chart_wd = chart_weekday(wds)
+    chart_month = chart_month_trend(man)
 
     # ---- s4 内容矩阵 ----
     rules = [(str(lbl), [str(k) for k in kws]) for lbl, kws in (nar.get("theme_rules") or DEFAULT_THEME_RULES)]
@@ -383,6 +587,15 @@ def build(args):
                        '<td>%d</td><td>%.1f%%</td><td><b>%.0f</b></td><td>%.0f</td><td>%.0f</td><td class="dim">%s</td></tr>'
                        % (hot, k, v["n"] * 100 // tmax, v["n"], v["n"] * 100.0 / n,
                           v["likes"] / v["n"], v["c"] / v["n"], v["col"] / v["n"], roles.get(k, "")))
+    chart_donut = chart_theme_donut(tstat, order)
+    chart_likes = chart_likes_hist(man)
+    theme_frames = ""
+    for k in order:
+        for m in top:
+            if theme_of(m) == k and frame(m["aweme_id"]):
+                theme_frames += ('<figure class="fcard"><img src="%s" alt="%s"><figcaption>%s %s · %s</figcaption></figure>'
+                                 % (frame(m["aweme_id"]), k, icon("tag", 11), f"{m.get('likes',0):,}", k))
+                break
 
     top_rows = ""
     for m in top[:args.top_n]:
@@ -470,11 +683,24 @@ def build(args):
         moods = cross.get("by_mood", {})
         best_mood = max(moods, key=lambda k: moods[k]["avg_likes"]) if moods else ""
         mood_line = ("情绪维度：「%s」均赞最高（%.0f）。" % (best_mood, moods[best_mood]["avg_likes"])) if best_mood else ""
+        chart_bgm = chart_bgm_compare(L)
+        mood_bars = ""
+        if moods:
+            mxm = max(v["avg_likes"] for v in moods.values()) or 1
+            for k in sorted(moods, key=lambda x: -moods[x]["avg_likes"]):
+                v = moods[k]
+                bh = 60 * v["avg_likes"] / mxm
+                mood_bars += ('<div class="hbar"><span class="hb-l">%s</span><div class="hb-track">'
+                              '<div class="hb-fill" style="width:%.1f%%;background:var(--c3)"></div></div>'
+                              '<span class="hb-v">均赞 %.0f · %d 条</span></div>'
+                              % (k, bh, v["avg_likes"], v["n"]))
         sec7 = f'''
 <section id="s7"><h2>06 · BGM × 互动交叉</h2>
 <div class="sec-sub">BGM 归档与互动指标的组间统计（数字取自 _cross.json，勿手写）</div>
+{chart_bgm}
 <table><tr><th>BGM 强度</th><th>条数</th><th>占比</th><th>均赞</th><th>均藏</th><th>均转</th></tr>{rows7}</table>
 <p>{mood_line}{mult}</p>
+{('<h3>' + icon_for('BGM音乐') + ' 6.2 情绪维度均赞分布</h3><div class="hbars">' + mood_bars + '</div>') if mood_bars else ''}
 {('<div class="ki">' + nar["s7_ki"] + "</div>") if nar.get("s7_ki") else ""}
 </section>'''
 
@@ -565,7 +791,7 @@ def build(args):
     html_doc = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title><style>{CSS}</style></head>
+<title>{title}</title><style>{full_css(design)}</style></head>
 <body><div class="page">
 <header class="masthead">
   <div class="kicker">{kicker}</div>
@@ -602,6 +828,7 @@ def build(args):
 <div class="chart-card"><h4>图 1 · 发布时段分布（按小时，{n} 条全量）</h4>
 <div class="src">数据来源：video-analysis/{acc}/manifest.json</div>
 <svg viewBox="0 0 620 130" width="100%" role="img">{hour_svg}</svg></div>
+<div class="chart-grid">{chart_wd}{chart_month}</div>
 <p>{s3_auto}</p>
 {('<div class="ki">' + nar["s3_ki"] + "</div>") if nar.get("s3_ki") else ""}
 </section>
@@ -609,6 +836,7 @@ def build(args):
 <section id="s4"><h2>03 · 内容矩阵拆解</h2>
 <div class="sec-sub">内容不是"什么都发"，而是清晰的主次结构</div>
 <h3>{icon('chart')} 3.1 内容主题结构</h3>
+<div class="chart-grid">{chart_donut}{chart_likes}</div>
 <table><tr><th>内容主题</th><th>条数</th><th>占比</th><th>平均赞</th><th>平均评</th><th>平均藏</th><th>定位</th></tr>{theme_rows}</table>
 {('<div class="note"><b>口径说明：</b>' + nar["s4_note"] + "</div>") if nar.get("s4_note") else ""}
 {('<h3>' + icon_for("爆款公式") + ' 3.2 爆款公式</h3><div class="formula">' + formula_html + "</div>") if formula_html else ""}
@@ -616,6 +844,7 @@ def build(args):
 <table><tr><th></th><th>点赞</th><th>收藏</th><th>评论</th><th>分享</th><th>日期</th><th>标题</th></tr>{top_rows}</table>
 {('<div class="ki">' + nar["s4_ki"] + "</div>") if nar.get("s4_ki") else ""}
 {('<h3>' + icon_for("关键帧画面") + ' 3.4 爆款关键帧切片</h3><div class="fgallery">' + frame_cards + "</div>") if frame_cards else ""}
+{('<h3>' + icon_for("tag标签") + ' 3.5 各内容主题代表画面</h3><div class="fgallery">' + theme_frames + "</div>") if theme_frames else ""}
 </section>
 
 {sec5}{sec6}{sec7}{sec8}{sec9}
@@ -623,7 +852,8 @@ def build(args):
 <footer>{"".join("<br>" + l if i else l for i, l in enumerate(limit_lines))}</footer>
 </div></body></html>'''
     n_cov = sum(1 for m in top[:args.top_n] if cover(m["aweme_id"]))
-    return html_doc, dict(n=n, covers=n_cov, frames=frame_cards.count("<figure"), missing=missing)
+    return html_doc, dict(n=n, covers=n_cov,
+                          frames=frame_cards.count("<figure") + theme_frames.count("<figure"), missing=missing)
 
 def selfcheck(page):
     """结构自检：标签平衡 + 导航锚点均有对应 section。返回问题列表（空=通过）。"""
@@ -648,16 +878,17 @@ def main():
     ap.add_argument("--title")
     ap.add_argument("--subtitle")
     ap.add_argument("--kicker")
-    ap.add_argument("--narrative", help="定性槽位 JSON（intro/conclusions/s4/s6_ki/… 见 references/report-template.md）")
+    ap.add_argument("--narrative", help="定性槽位 JSON（intro/conclusions/s4/s6_ki/… 见 references/report-template.md）；含可选 design dict 提供视觉 token")
+    ap.add_argument("--design", help="视觉 token JSON dict（覆盖 narrative.design；键见 NEUTRAL_DEFAULT，漏键回落可读性基线）")
     ap.add_argument("--top-n", type=int, default=10)
-    ap.add_argument("--frames-n", type=int, default=6)
+    ap.add_argument("--frames-n", type=int, default=8)
     ap.add_argument("--img-cap-kb", type=int, default=400)
     a = ap.parse_args()
     page, stat = build(a)
     out_dir = os.path.dirname(os.path.abspath(a.out))
     os.makedirs(out_dir, exist_ok=True)
     open(a.out, "w", encoding="utf-8").write(page)
-    print("[report_html] %s (%d KB) | 作品 %d | TOP封面 %d/%d | 关键帧 %d | 缺源 %s"
+    print("[report_html] %s (%d KB) | 作品 %d | TOP封面 %d/%d | 真图帧 %d | 缺源 %s"
           % (a.out, os.path.getsize(a.out) // 1024, stat["n"], stat["covers"], a.top_n,
              stat["frames"], "、".join(stat["missing"]) or "无"))
     bad = selfcheck(page)
