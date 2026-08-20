@@ -16,7 +16,7 @@
 - 每个账号必须使用唯一 `--account` slug。`crawl.py` 在 `<root>/accounts/<slug>.json` 记录并绑定 creator `sec_uid`；同一 slug 指向另一个账号时立即拒绝。
 - `process.py` 自动读取当前 `crawl_<account>/douyin/jsonl/`；旧共享目录所有权不明确，必须显式传 `--json`。
 - `comments.py` 只扫描当前 `crawl_<account>/`，并按当前 manifest 的 `aweme_id` 再过滤一次。
-- `tools/analyze.py` 提供统一分析入口：抽帧与口播转写并行，BGM 串行；任一阶段失败立即非零退出。
+- `tools/analyze.py` 提供统一分析入口：口播转写先行，随后自适应抽帧与 BGM 并行，最后逐帧画面指标与字幕 OCR；任一阶段失败立即非零退出。
 - Windows 路径统一通过参数传入；批处理优先使用 Python `subprocess`，避免 PowerShell 中文路径编码问题。
 
 ## 能力降级
@@ -48,11 +48,11 @@ python tools/analyze.py --root <root> --account <slug>
 
 调度顺序固定为：
 
-1. 抽帧和口播转写并行；
-2. 两者均成功后执行 BGM；
-3. 任一阶段失败立即退出，不执行兜底。
+1. 口播音频转写（音频直连抓取 JSON 的 `music_download_url`，不依赖已下载的视频文件）；
+2. 自适应抽帧与 BGM 转写并行（抽帧读已下载 MP4，BGM 复用同一音频缓存）；
+3. 逐帧画面指标与字幕 OCR。
 
-使用 `--skip-bgm` 可只执行抽帧和口播转写。GPU 机器默认保持较低转写并发，避免口播和 BGM 同时争抢显存。
+任一阶段失败立即退出，不执行兜底。BGM 不与口播转写同时运行，避免两者争抢 GPU 显存；抽帧为 CPU 任务，与 BGM 并行互不影响。使用 `--skip-bgm` 可跳过 BGM 阶段，口播转写、抽帧与画面分析照常执行。
 
 ## 多账号目录隔离
 

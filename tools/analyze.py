@@ -6,7 +6,7 @@
   python tools/analyze.py --root <root> --account <slug>
 可选：--fps 1 --frame-workers 4 --transcribe-workers 2 --bgm-workers 2
 
-设计约束：抽帧与口播转写可并行；BGM 默认串行执行，避免与口播转写争抢 GPU。
+设计约束：口播转写先行；随后抽帧与 BGM 并行，两者均不与口播转写同时运行，避免争抢 GPU。
 任一阶段失败立即返回非零退出码，不生成或使用兜底结果。
 """
 import argparse

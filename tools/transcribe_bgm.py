@@ -92,8 +92,8 @@ def _lowfreq_ratio(x):
     return low / tot if tot else 0.0
 
 
-def classify(x, txt, avg_prob):
-    """由音频包络 + 转写着启发式归档。"""
+def classify(x, txt, lang_prob):
+    """由音频包络 + 转写着启发式归档。lang_prob 为 whisper 的语言置信度(0-1)。"""
     if x is None:
         return {"bgm_level": "none", "vocal": "none", "mood": "silent",
                 "energy": 0.0, "energy_var": 0.0, "silence": 1.0}
@@ -110,7 +110,9 @@ def classify(x, txt, avg_prob):
     else:
         bgm = "light" if (has_speech and evar < 0.10 and emean > 0.15) else "none"
 
-    vocal = "speech" if has_speech else ("singing" if avg_prob and avg_prob < 0.6 else "none")
+    # 无成句文本但语言置信度仍高 -> 疑似唱词（历史 bug：此处曾误用 avg_logprob 负值，
+    # 导致 <0.6 恒真、任何能转出片段的纯音乐都被标 singing）
+    vocal = "speech" if has_speech else ("singing" if (lang_prob is not None and lang_prob >= 0.5) else "none")
 
     # mood 启发式
     if bgm == "none" and vocal == "none":
@@ -128,6 +130,7 @@ def classify(x, txt, avg_prob):
         "bgm_level": bgm, "vocal": vocal, "mood": mood,
         "energy": round(emean, 4), "energy_var": round(evar, 4),
         "silence": round(sil, 3), "lfe_ratio": round(lfe, 3),
+        "lang_prob": round(lang_prob, 3) if lang_prob is not None else None,
     }
 
 
@@ -161,16 +164,33 @@ def main():
         return os.path.exists(os.path.join(od, aid + ".json"))
 
     if all(done(aid) for aid, _ in items):
-        print(f"[skip-all] {len(items)} 个 BGM 产物均已产成，跳过 | {probe.snapshot(has_cuda)}")
+        print(f"[skip-all] {len(items)} 个 BGM 产物均已产成，跳过 | {probe.snapshot(has_cuda)}", flush=True)
         return
 
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
     compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
     w = a.workers or probe.transcribe_workers(has_cuda)
-    print(f"[env] cuda_count={has_cuda} | {probe.snapshot(has_cuda)} -> device={device}/{compute}, workers={w}")
+    print(f"[env] cuda_count={has_cuda} | {probe.snapshot(has_cuda)} -> device={device}/{compute}, workers={w}", flush=True)
 
     from faster_whisper import WhisperModel
-    model = WhisperModel(a.model, device=device, compute_type=compute)
+    def load_model(path, dev, comp):
+        """与 transcribe.py 同款降级链：float16 -> int8_float32 -> CPU int8（此前直接崩溃）"""
+        try:
+            return WhisperModel(path, device=dev, compute_type=comp), dev, comp
+        except (ValueError, RuntimeError, OSError) as e:
+            if dev == "cuda" and comp == "float16":
+                print(f"[warn] float16 不受支持({str(e)[:60]})，降级 int8_float32 重试", flush=True)
+                try:
+                    return WhisperModel(path, device="cuda", compute_type="int8_float32"), "cuda", "int8_float32"
+                except (ValueError, RuntimeError, OSError):
+                    pass
+            if dev == "cuda":
+                print("[warn] CUDA 后端不可用，回退 CPU int8", flush=True)
+                return WhisperModel(path, device="cpu", compute_type="int8"), "cpu", "int8"
+            raise
+
+    model, device, compute = load_model(a.model, device, compute)
+    print(f"[model] 实际生效 device={device}/{compute}", flush=True)
 
     def one(item):
         aid, url = item
@@ -182,55 +202,64 @@ def main():
             x = _decoded_audio(audio_path)
             if x is None:
                 raise RuntimeError("audio decode failed")
-            txt, avg = "", None
+            txt, lang_prob = "", None
             try:
                 segs, info = model.transcribe(audio_path, language=None, vad_filter=False,
                                               beam_size=5, condition_on_previous_text=False)
                 segs = list(segs)
                 txt = "".join(s.text.strip() for s in segs)
-                avg = float(sum(s.avg_logprob for s in segs) / len(segs)) if segs else None
-            except Exception as e:
-                txt, avg = "", None
-            meta = classify(x, txt, avg)
+                lang_prob = float(info.language_probability) if info.language_probability is not None else None
+            except Exception:
+                txt, lang_prob = "", None
+            meta = classify(x, txt, lang_prob)
             meta.update({"aweme_id": aid, "duration_sec": round((len(x) / SR) if x is not None else 0, 1),
                          "bgm_text": txt[:200], "lang": "zh-hint", "source": "music_download_url",
                          "source_status": "ok", "audio_path": os.path.relpath(audio_path, od).replace(os.sep, "/")})
             jp = os.path.join(od, aid + ".json")
-            with open(jp, "w", encoding="utf-8") as f:
+            tmp = jp + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(meta, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, jp)
             return aid, f"ok {meta['bgm_level']}/{meta['vocal']}/{meta['mood']} {time.time()-t0:.1f}s"
         except Exception as e:
             return aid, f"ERR {str(e)[:90]}"
 
-    print(f"[start] {len(items)} music URLs -> {od}")
+    print(f"[start] {len(items)} music URLs -> {od}", flush=True)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
         futs = {ex.submit(one, item): item for item in items}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()
             results.append(note)
-            print(f"  [{i}/{len(items)}] {aid}: {note}")
+            print(f"  [{i}/{len(items)}] {aid}: {note}", flush=True)
 
-    # 聚合 manifest
+    # 聚合 manifest（容错：进程被杀留下的半截 json 会被原子写杜绝，此处仍兜底跳过）
     agg = {"by_bgm": {}, "by_mood": {}, "by_vocal": {}, "n": len(results)}
     records = []
     for aid, _ in items:
         jp = os.path.join(od, aid + ".json")
         if os.path.exists(jp):
-            records.append(json.load(open(jp, encoding="utf-8")))
+            try:
+                records.append(json.load(open(jp, encoding="utf-8")))
+            except Exception:
+                continue
     for r in records:
         agg["by_bgm"][r["bgm_level"]] = agg["by_bgm"].get(r["bgm_level"], 0) + 1
         agg["by_mood"][r["mood"]] = agg["by_mood"].get(r["mood"], 0) + 1
         agg["by_vocal"][r["vocal"]] = agg["by_vocal"].get(r["vocal"], 0) + 1
     manifest_p = os.path.join(od, "_manifest.json")
-    json.dump(agg, open(manifest_p, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    # 与单视频 .json 同款原子写，注释宣称的"原子写杜绝半截"才真正成立
+    tmp_p = manifest_p + ".tmp"
+    with open(tmp_p, "w", encoding="utf-8") as f:
+        json.dump(agg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_p, manifest_p)
 
     errs = [r for r in results if r.startswith("ERR")]
     skips = [r for r in results if r == "skip"]
-    print("=" * 60)
-    print(f"[聚合] {json.dumps(agg, ensure_ascii=False)}")
-    print(f"[done] total={len(results)} ok={len(results)-len(errs)-len(skips)} skip={len(skips)} err={len(errs)}")
-    print(f"[manifest] {manifest_p}")
+    print("=" * 60, flush=True)
+    print(f"[聚合] {json.dumps(agg, ensure_ascii=False)}", flush=True)
+    print(f"[done] total={len(results)} ok={len(results)-len(errs)-len(skips)} skip={len(skips)} err={len(errs)}", flush=True)
+    print(f"[manifest] {manifest_p}", flush=True)
     if errs:
         sys.exit(1)
 

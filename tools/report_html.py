@@ -25,6 +25,7 @@ transcript 目录），杜绝手写数字与数据漂移；定性结论经 --nar
 """
 import argparse
 import base64
+import html
 import json
 import math
 import os
@@ -32,6 +33,11 @@ import re
 import sys
 from collections import Counter
 from datetime import datetime
+
+
+def esc(s):
+    """HTML 转义：所有动态文本（标题/评论/话术/narrative 槽位）拼进 HTML 前必须过此函数。"""
+    return html.escape(str(s), quote=True)
 
 # ---------------- 图标系统（SVG，自动插入标题/卡片/导航） ----------------
 ICONS = {
@@ -103,7 +109,9 @@ def pctile(sorted_vals, p):
 def b64img(path, cap_kb):
     try:
         if os.path.isfile(path) and os.path.getsize(path) <= cap_kb * 1024:
-            return "data:image/jpeg;base64," + base64.b64encode(open(path, "rb").read()).decode()
+            raw = open(path, "rb").read()
+            mime = "image/png" if raw[:8] == b"\x89PNG\r\n\x1a\n" else "image/jpeg"
+            return "data:%s;base64," % mime + base64.b64encode(raw).decode()
     except OSError:
         pass
     return ""
@@ -111,7 +119,7 @@ def b64img(path, cap_kb):
 def hbar(pct, label, val, color):
     return ('<div class="hbar"><span class="hb-l">%s</span><div class="hb-track">'
             '<div class="hb-fill" style="width:%.1f%%;background:%s"></div></div>'
-            '<span class="hb-v">%s</span></div>' % (label, pct, color, val))
+            '<span class="hb-v">%s</span></div>' % (esc(label), pct, esc(color), esc(val)))
 
 CSS = """
 :root{__TOKENS__}
@@ -294,7 +302,10 @@ def chart_weekday(wds):
 def chart_month_trend(man):
     cnt, likes = Counter(), {}
     for m in man:
-        k = datetime.fromtimestamp(m["create_time"]).strftime("%Y-%m")
+        try:
+            k = datetime.fromtimestamp(int(m.get("create_time"))).strftime("%Y-%m")
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
         cnt[k] += 1
         likes.setdefault(k, 0)
         likes[k] += m.get("likes", 0)
@@ -318,7 +329,9 @@ def chart_month_trend(man):
             bars += ('<text x="%.1f" y="130" font-size="9" fill="var(--ink-30)" text-anchor="middle">%s</text>'
                      % (bx + bw / 2, k[2:]))
         avg = likes[k] / cnt[k]
-        pts.append((bx + bw / 2, 108 - min(avg / (sum(likes.values()) / max(len(likes), 1) * 3), 1) * 60))
+        denom = sum(likes.values()) / max(len(likes), 1) * 3
+        ratio = min(avg / denom, 1) if denom else 0
+        pts.append((bx + bw / 2, 108 - ratio * 60))
     ln = "".join('L%.1f %.1f' % p for p in pts[1:])
     poly = '<path d="M%.1f %.1f %s" fill="none" stroke="var(--rose)" stroke-width="2.5"/>' % (pts[0][0], pts[0][1], ln)
     dots = "".join('<circle cx="%.1f" cy="%.1f" r="3" fill="var(--rose)"/>' % p for p in pts)
@@ -332,8 +345,10 @@ def chart_likes_hist(man):
     cnt = [0] * (len(bins) - 1)
     for m in man:
         lk = m.get("likes", 0)
+        # 左闭右开 [bins[i], bins[i+1]) 对齐标签语义；旧版 lk>bins[i] 把 0 赞
+        # 全部落进 for-else 兜底档"10万+"，边界值(100/1k/1万)也全部左错一档
         for i in range(len(bins) - 2, -1, -1):
-            if lk > bins[i] and lk <= bins[i + 1]:
+            if lk >= bins[i] and lk < bins[i + 1]:
                 cnt[i] += 1
                 break
         else:
@@ -347,9 +362,9 @@ def chart_likes_hist(man):
         bh = 90 * v / mx
         by = 106 - bh
         bars += ('<rect x="%d" y="%.1f" width="88" height="%.1f" rx="5" fill="var(--c1)">'
-                 '<title>%s · %d 条</title></rect>' % (bx, by, bh, labels[i], v))
+                 '<title>%s · %d 条</title></rect>' % (bx, by, bh, esc(labels[i]), v))
         bars += ('<text x="%d" y="124" font-size="10" fill="var(--ink-30)" text-anchor="middle">%s</text>'
-                 % (bx + 44, labels[i]))
+                 % (bx + 44, esc(labels[i])))
     return svg_chart(bars, 620, 132, "点赞量分布（对数分箱）", "数据：manifest.likes", "")
 
 def chart_theme_donut(tstat, order):
@@ -421,15 +436,22 @@ def build(args):
     cross = load_json(os.path.join(root, "bgm", acc, "_cross.json"))
 
     n = len(man)
-    bya = {m["aweme_id"]: m for m in man}
+    bya = {m["aweme_id"]: m for m in man if m.get("aweme_id")}
     likes_sorted = sorted(m.get("likes", 0) for m in man)
     sum_likes = sum(likes_sorted)
     sum_c = sum(m.get("comments", 0) for m in man)
     sum_col = sum(m.get("collects", 0) for m in man)
     top = sorted(man, key=lambda m: -m.get("likes", 0))
     avg_like = sum_likes / n
-    dates = sorted(datetime.fromtimestamp(m["create_time"]) for m in man)
-    years = (dates[-1] - dates[0]).days / 365.0
+
+    def _dt(m):
+        try:
+            return datetime.fromtimestamp(int(m.get("create_time")))
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    dates = sorted(d for d in (_dt(m) for m in man) if d)
+    years = (dates[-1] - dates[0]).days / 365.0 if dates else 0.0
 
     covers_d = os.path.join(root, "covers", acc)
     frames_d = os.path.join(root, "video-analysis", acc, "frames")
@@ -476,7 +498,7 @@ def build(args):
         (" + %d 视频关键帧" % n_fvids) if n_fvids else "（关键帧缺源）"))
 
     pills = nar.get("pills") or [
-        "视频 %d" % n, "%s – %s" % (dates[0].strftime("%Y-%m"), dates[-1].strftime("%Y-%m")),
+        "视频 %d" % n, "%s – %s" % (dates[0].strftime("%Y-%m"), dates[-1].strftime("%Y-%m")) if dates else "时间跨度未知",
         ("评论 %d 视频覆盖" % len(comments["by_aweme"])) if comments else "评论缺源",
         "非抽样全量",
     ]
@@ -508,12 +530,12 @@ def build(args):
             "（自动摘要）单条最高赞 %s，为账号爆款上限参照。" % f"{likes_sorted[-1]:,}",
             "（自动摘要）定性结论请经 --narrative 提供 conclusions 槽位。",
         ]
-    concl_html = "".join("<p>%s</p>" % c for c in conclusions)
+    concl_html = "".join("<p>%s</p>" % esc(c) for c in conclusions)
     stats1 = ('<div class="stat"><b>%d</b><small>全量作品（非抽样）</small></div>'
               '<div class="stat"><b>%.1f年</b><small>持续运营（%s 起）</small></div>'
               '<div class="stat"><b>%s</b><small>单条最高点赞</small></div>'
               '<div class="stat"><b>%.1f%%</b><small>收藏率（藏/赞）vs 评论率 %.1f%%</small></div>'
-              % (n, years, dates[0].strftime("%Y-%m"), f"{likes_sorted[-1]:,}", rate_col, rate_c))
+              % (n, years, dates[0].strftime("%Y-%m") if dates else "未知", f"{likes_sorted[-1]:,}", rate_col, rate_c))
 
     # ---- s2 对标方法（固定五步法骨架） ----
     steps_data = nar.get("benchmark_steps") or [
@@ -523,13 +545,13 @@ def build(args):
         {"t": "变现路径拆解", "d": "从口播与评论提取产品线、价格叙事、直播导流话术。"},
         {"t": "持续追踪迭代", "d": "定期增量抓取对比互动迁移；建立 3-5 个对标池账号。"},
     ]
-    steps2 = "".join('<div class="step"><div><h5>%s</h5><p>%s</p></div></div>' % (s["t"], s["d"]) for s in steps_data)
+    steps2 = "".join('<div class="step"><div><h5>%s</h5><p>%s</p></div></div>' % (esc(s["t"]), esc(s["d"])) for s in steps_data)
 
     # ---- s3 画像 ----
     year_cnt = Counter(d.year for d in dates)
     yrs = " / ".join("%d:%d" % (y, c) for y, c in sorted(year_cnt.items()))
     p50, p90 = pctile(likes_sorted, 50), pctile(likes_sorted, 90)
-    extra_rows = [(str(r[0]), str(r[1]), str(r[2])) for r in nar.get("profile_rows", [])]
+    extra_rows = [(esc(r[0]), esc(r[1]), esc(r[2])) for r in nar.get("profile_rows", [])]
     profile_rows = "".join(
         '<tr><td>%s</td><td>%s</td><td class="dim">%s</td></tr>' % r for r in [
             ("作品总量", "%d 条（全量非抽样）" % n, "内容库足够矩阵拆解"),
@@ -585,8 +607,8 @@ def build(args):
         hot = ' class="hot"' if v["likes"] / v["n"] > avg_like * 2 else ""
         theme_rows += ('<tr%s><td><b>%s</b><div class="mini-bar"><span style="width:%d%%"></span></div></td>'
                        '<td>%d</td><td>%.1f%%</td><td><b>%.0f</b></td><td>%.0f</td><td>%.0f</td><td class="dim">%s</td></tr>'
-                       % (hot, k, v["n"] * 100 // tmax, v["n"], v["n"] * 100.0 / n,
-                          v["likes"] / v["n"], v["c"] / v["n"], v["col"] / v["n"], roles.get(k, "")))
+                       % (hot, esc(k), v["n"] * 100 // tmax, v["n"], v["n"] * 100.0 / n,
+                          v["likes"] / v["n"], v["c"] / v["n"], v["col"] / v["n"], esc(roles.get(k, ""))))
     chart_donut = chart_theme_donut(tstat, order)
     chart_likes = chart_likes_hist(man)
     theme_frames = ""
@@ -594,29 +616,33 @@ def build(args):
         for m in top:
             if theme_of(m) == k and frame(m["aweme_id"]):
                 theme_frames += ('<figure class="fcard"><img src="%s" alt="%s"><figcaption>%s %s · %s</figcaption></figure>'
-                                 % (frame(m["aweme_id"]), k, icon("tag", 11), f"{m.get('likes',0):,}", k))
+                                 % (frame(m["aweme_id"]), esc(k), icon("tag", 11), f"{m.get('likes',0):,}", esc(k)))
                 break
 
     top_rows = ""
     for m in top[:args.top_n]:
-        d = datetime.fromtimestamp(m["create_time"]).strftime("%Y-%m-%d")
+        # TOP 榜日期：create_time 缺失/非法时显示占位而非整份报告崩溃（_dt 同款容错）
+        try:
+            d = datetime.fromtimestamp(int(m["create_time"])).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OSError, OverflowError):
+            d = "-"
         cv = cover(m["aweme_id"])
         img = '<img class="mini-cov" src="%s" alt="">' % cv if cv else '<span class="mini-cov none">无封面</span>'
         top_rows += ('<tr><td>%s</td><td class="num"><b>%s</b></td><td class="num">%s</td>'
                      '<td class="num">%s</td><td class="num">%s</td><td class="dim">%s</td><td class="t-cell">%s</td></tr>'
                      % (img, f"{m.get('likes',0):,}", f"{m.get('collects',0):,}", f"{m.get('comments',0):,}",
-                        f"{m.get('shares',0):,}", d, (m.get("title") or "")[:38]))
+                        f"{m.get('shares',0):,}", d, esc((m.get("title") or "")[:38])))
 
     frame_cards, nf = "", 0
     for m in top:
         f = frame(m["aweme_id"])
         if f:
             frame_cards += ('<figure class="fcard"><img src="%s" alt="关键帧"><figcaption>%s %s · %s</figcaption></figure>'
-                            % (f, icon("fire", 12), f"{m.get('likes',0):,}", (m.get("title") or "")[:16]))
+                            % (f, icon("fire", 12), f"{m.get('likes',0):,}", esc((m.get("title") or "")[:16])))
             nf += 1
             if nf >= args.frames_n:
                 break
-    formula_html = "".join('<div class="fcell"><b>%s</b>%s</div>' % (c["t"], c["d"]) for c in nar.get("formula", []))
+    formula_html = "".join('<div class="fcell"><b>%s</b>%s</div>' % (esc(c["t"]), esc(c["d"])) for c in nar.get("formula", []))
 
     # ---- s6 评论区实证 ----
     sec6 = ""
@@ -631,7 +657,7 @@ def build(args):
                                   "var(--gold)" if k in WARN_THEMES else "var(--rose)") for k, v in themes)
         comment_cards = "".join(
             '<div class="qcard"><div class="q-top">%s <b>%d</b> 赞</div><p>%s</p><div class="q-src">↳ 视频『%s』</div></div>'
-            % (icon("quote", 14), lk, t[:80], ((bya.get(aid, {}).get("title")) or "")[:20]) for lk, t, aid in allc[:6])
+            % (icon("quote", 14), lk, esc(t[:80]), esc(((bya.get(aid, {}).get("title")) or "")[:20])) for lk, t, aid in allc[:6])
 
         def pick(pat, k=4, minlen=8):
             return [(lk, t) for lk, t, _ in allc if len(t) >= minlen and re.search(pat, t)][:k]
@@ -645,8 +671,8 @@ def build(args):
             if not samples_g:
                 continue
             warn = ' warn' if any(w in gname for w in WARN_THEMES) else ''
-            qs = "".join('<li>"%s"<span class="q-like">%s %d</span></li>' % (t[:66], icon("fire", 11), lk) for lk, t in samples_g)
-            qcols += '<div class="qgroup%s"><h4>%s</h4><ul>%s</ul></div>' % (warn, gname, qs)
+            qs = "".join('<li>"%s"<span class="q-like">%s %d</span></li>' % (esc(t[:66]), icon("fire", 11), lk) for lk, t in samples_g)
+            qcols += '<div class="qgroup%s"><h4>%s</h4><ul>%s</ul></div>' % (warn, esc(gname), qs)
         note6 = nar.get("s6_note") or "规则匹配可重复复现；一条评论只计入首个命中主题。截断上限见 comments.json 各视频 max 字段。"
         top_theme = max(themes, key=lambda x: x[1])[0] if themes else "-"
         sec6 = f'''
@@ -656,13 +682,13 @@ def build(args):
 <div class="stat"><b>{nc:,}</b><small>评论总量（按赞截断口径）</small></div>
 <div class="stat"><b>{nv}</b><small>覆盖视频数（{nv * 100.0 / n:.1f}%）</small></div>
 <div class="stat"><b>{allc[0][0] if allc else 0}</b><small>最高赞评论</small></div>
-<div class="stat"><b>{top_theme}</b><small>最大主题池</small></div>
+<div class="stat"><b>{esc(top_theme)}</b><small>最大主题池</small></div>
 </div>
 <h3>{icon('chart')} 5.1 评论主题分布</h3><div class="hbars">{theme_bars}</div>
-<div class="note"><b>口径：</b>{note6}</div>
+<div class="note"><b>口径：</b>{esc(note6)}</div>
 <h3>{icon('quote')} 5.2 高赞评论 Top6（原声）</h3><div class="qgrid">{comment_cards}</div>
 <h3>{icon('target')} 5.3 决策摩擦原声分组</h3><div class="qcols">{qcols}</div>
-{('<div class="ki">' + nar["s6_ki"] + "</div>") if nar.get("s6_ki") else ""}
+{('<div class="ki">' + esc(nar["s6_ki"]) + "</div>") if nar.get("s6_ki") else ""}
 </section>'''
 
     # ---- s7 BGM×互动 ----
@@ -675,14 +701,14 @@ def build(args):
                 continue
             v = L[k]
             rows7 += ('<tr><td><b>%s</b></td><td>%d</td><td>%.1f%%</td><td><b>%.0f</b></td><td>%.0f</td><td>%.0f</td></tr>'
-                      % (v.get("label") or label, v["n"], v["pct"], v["avg_likes"], v["avg_collects"], v["avg_shares"]))
+                      % (esc(v.get("label") or label), v["n"], v["pct"], v["avg_likes"], v["avg_collects"], v["avg_shares"]))
         s = cross.get("summary", {})
         mult = ("轻 BGM 比纯口播均赞 ×%s、收藏 ×%s、分享 ×%s。"
                 % (s.get("light_vs_none_like_mult", "-"), s.get("light_vs_none_collect_mult", "-"),
                    s.get("light_vs_none_share_mult", "-"))) if s else ""
         moods = cross.get("by_mood", {})
         best_mood = max(moods, key=lambda k: moods[k]["avg_likes"]) if moods else ""
-        mood_line = ("情绪维度：「%s」均赞最高（%.0f）。" % (best_mood, moods[best_mood]["avg_likes"])) if best_mood else ""
+        mood_line = ("情绪维度：「%s」均赞最高（%.0f）。" % (esc(best_mood), moods[best_mood]["avg_likes"])) if best_mood else ""
         chart_bgm = chart_bgm_compare(L)
         mood_bars = ""
         if moods:
@@ -693,7 +719,7 @@ def build(args):
                 mood_bars += ('<div class="hbar"><span class="hb-l">%s</span><div class="hb-track">'
                               '<div class="hb-fill" style="width:%.1f%%;background:var(--c3)"></div></div>'
                               '<span class="hb-v">均赞 %.0f · %d 条</span></div>'
-                              % (k, bh, v["avg_likes"], v["n"]))
+                              % (esc(k), bh, v["avg_likes"], v["n"]))
         sec7 = f'''
 <section id="s7"><h2>06 · BGM × 互动交叉</h2>
 <div class="sec-sub">BGM 归档与互动指标的组间统计（数字取自 _cross.json，勿手写）</div>
@@ -701,58 +727,58 @@ def build(args):
 <table><tr><th>BGM 强度</th><th>条数</th><th>占比</th><th>均赞</th><th>均藏</th><th>均转</th></tr>{rows7}</table>
 <p>{mood_line}{mult}</p>
 {('<h3>' + icon_for('BGM音乐') + ' 6.2 情绪维度均赞分布</h3><div class="hbars">' + mood_bars + '</div>') if mood_bars else ''}
-{('<div class="ki">' + nar["s7_ki"] + "</div>") if nar.get("s7_ki") else ""}
+{('<div class="ki">' + esc(nar["s7_ki"]) + "</div>") if nar.get("s7_ki") else ""}
 </section>'''
 
     # ---- s5 文案 / s8 变现 / s9 起号（全定性，narrative 驱动，缺则整章省略） ----
     sec5 = ""
     if nar.get("s4"):
         s4 = nar["s4"]
-        stats4 = "".join('<div class="stat"><b>%s</b><small>%s</small></div>' % (c["b"], c["s"]) for c in s4.get("stats", []))
-        slogan_rows = "".join('<tr><td><b>%s</b></td><td>%s</td><td class="dim">%s</td></tr>' % tuple(r) for r in s4.get("slogans", []))
-        title_rows = "".join('<tr><td>%s</td><td class="dim">%s</td></tr>' % tuple(r) for r in s4.get("title_samples", []))
-        quote_rows = "".join('<tr><td><b>%s</b></td><td>%s</td><td class="dim">%s</td></tr>' % tuple(r) for r in s4.get("quotes", []))
-        formula4 = "".join('<div class="fcell"><b>%s</b>%s</div>' % (c["t"], c["d"]) for c in s4.get("formula", []))
-        checklist4 = "".join("<li>%s</li>" % i for i in s4.get("checklist", []))
+        stats4 = "".join('<div class="stat"><b>%s</b><small>%s</small></div>' % (esc(c["b"]), esc(c["s"])) for c in s4.get("stats", []))
+        slogan_rows = "".join('<tr><td><b>%s</b></td><td>%s</td><td class="dim">%s</td></tr>' % tuple(esc(x) for x in r) for r in s4.get("slogans", []))
+        title_rows = "".join('<tr><td>%s</td><td class="dim">%s</td></tr>' % tuple(esc(x) for x in r) for r in s4.get("title_samples", []))
+        quote_rows = "".join('<tr><td><b>%s</b></td><td>%s</td><td class="dim">%s</td></tr>' % tuple(esc(x) for x in r) for r in s4.get("quotes", []))
+        formula4 = "".join('<div class="fcell"><b>%s</b>%s</div>' % (esc(c["t"]), esc(c["d"])) for c in s4.get("formula", []))
+        checklist4 = "".join("<li>%s</li>" % esc(i) for i in s4.get("checklist", []))
         blk_stats = ('<div class="stats">' + stats4 + "</div>") if stats4 else ""
         blk_slogan = ("<h3>" + icon_for("标题句式") + " 4.2 固定口号系统</h3>"
                       "<table><tr><th>口号</th><th>出现场景</th><th>功能</th></tr>" + slogan_rows + "</table>") if slogan_rows else ""
-        blk_title = ("<h3>" + icon_for("标题三段式") + " 4.3 标题三段式</h3><p>" + s4.get("title_formula", "")
+        blk_title = ("<h3>" + icon_for("标题三段式") + " 4.3 标题三段式</h3><p>" + esc(s4.get("title_formula", ""))
                      + "</p><table><tr><th>样本</th><th>拆解</th></tr>" + title_rows + "</table>") if s4.get("title_formula") else ""
         blk_quote = ("<h3>" + icon_for("金句") + " 4.4 金句切片</h3>"
                      "<table><tr><th>话术线</th><th>示例（原文）</th><th>写作手法</th></tr>" + quote_rows + "</table>") if quote_rows else ""
-        blk_ki = '<div class="ki">' + s4["ki"] + "</div>" if s4.get("ki") else ""
-        blk_corpus = ("<h3>" + icon_for("语料口播") + " 4.5 口播语料地图</h3><p>" + s4["corpus"] + "</p>") if s4.get("corpus") else ""
+        blk_ki = '<div class="ki">' + esc(s4["ki"]) + "</div>" if s4.get("ki") else ""
+        blk_corpus = ("<h3>" + icon_for("语料口播") + " 4.5 口播语料地图</h3><p>" + esc(s4["corpus"]) + "</p>") if s4.get("corpus") else ""
         blk_formula = ('<h3>' + icon_for("带货产品") + ' 4.6 带货口播结构</h3><div class="formula">' + formula4 + "</div>") if formula4 else ""
-        blk_cta = ("<h3>" + icon_for("CTA互动钩子") + " 4.7 CTA 与互动钩子</h3><p>" + s4["cta_note"]
+        blk_cta = ("<h3>" + icon_for("CTA互动钩子") + " 4.7 CTA 与互动钩子</h3><p>" + esc(s4["cta_note"])
                    + '</p><ul class="checklist">' + checklist4 + "</ul>") if s4.get("cta_note") else ""
         sec5 = f'''
 <section id="s5"><h2>04 · 文案写作逻辑深度拆解</h2>
-<div class="sec-sub">{s4.get("sub", "基于逐字稿与标题的全量拆解")}</div>
-{s4.get("intro", "")}
+<div class="sec-sub">{esc(s4.get("sub", "基于逐字稿与标题的全量拆解"))}</div>
+{esc(s4.get("intro", ""))}
 {blk_stats}{blk_slogan}{blk_title}{blk_quote}{blk_ki}{blk_corpus}{blk_formula}{blk_cta}
 </section>'''
 
     sec8 = ""
     if nar.get("s7"):
         s7n = nar["s7"]
-        steps7 = "".join('<div class="step"><div><h5>%s</h5><p>%s</p></div></div>' % (s["t"], s["d"]) for s in s7n.get("steps", []))
+        steps7 = "".join('<div class="step"><div><h5>%s</h5><p>%s</p></div></div>' % (esc(s["t"]), esc(s["d"])) for s in s7n.get("steps", []))
         blk_steps7 = ('<h3>' + icon_for("产品带货") + ' 7.1 产品叙事模板</h3><div class="steps">' + steps7 + "</div>") if steps7 else ""
-        blk_caveat7 = '<div class="note"><b>数据口径：</b>' + s7n["caveat"] + "</div>" if s7n.get("caveat") else ""
+        blk_caveat7 = '<div class="note"><b>数据口径：</b>' + esc(s7n["caveat"]) + "</div>" if s7n.get("caveat") else ""
         sec8 = f'''
 <section id="s8"><h2>07 · 带货与变现逻辑</h2>
-<div class="sec-sub">{s7n.get("sub", "产品叙事模板 + 引流闭环")}</div>
+<div class="sec-sub">{esc(s7n.get("sub", "产品叙事模板 + 引流闭环"))}</div>
 {blk_steps7}
-{s7n.get("note", "")}
+{esc(s7n.get("note", ""))}
 {blk_caveat7}
 </section>'''
 
     sec9 = ""
     if nar.get("s8"):
         s8n = nar["s8"]
-        weak = "".join("<li>%s</li>" % w for w in s8n.get("weakness", []))
-        plan = "".join(('<h3>' + icon_for(p["h"]) + " %s</h3><p>%s</p>") % (p["h"], p["p"]) for p in s8n.get("plan", []))
-        comp = "".join("<li>%s</li>" % c for c in s8n.get("compliance", []))
+        weak = "".join("<li>%s</li>" % esc(w) for w in s8n.get("weakness", []))
+        plan = "".join(('<h3>' + icon_for(p["h"]) + " %s</h3><p>%s</p>") % (esc(p["h"]), esc(p["p"])) for p in s8n.get("plan", []))
+        comp = "".join("<li>%s</li>" % esc(c) for c in s8n.get("compliance", []))
         blk_weak = ("<h3>" + icon_for("弱点风险") + ' 对标弱点（数据实证）</h3><ul class="checklist">' + weak + "</ul>") if weak else ""
         blk_comp = ("<h3>" + icon_for("合规红线") + ' 合规层：话术红线（最高优先级）</h3><ul class="checklist">' + comp + "</ul>") if comp else ""
         sec9 = f'''
@@ -782,7 +808,7 @@ def build(args):
     if missing:
         limit_lines.append("缺源声明：" + "、".join(missing) + "——相关章节已省略或标注，不虚构。")
     if nar.get("footer_extra"):
-        limit_lines.append(str(nar["footer_extra"]))
+        limit_lines.append(esc(str(nar["footer_extra"])))
     limit_lines.append("合规边界：仅供内部对标研究；引用的达人话术与用户评论不构成投放建议，商用前须过合规审查。")
 
     kicker = args.kicker or "Douyin Creator Benchmark · %s" % datetime.now().strftime("%Y.%m")
@@ -791,19 +817,19 @@ def build(args):
     html_doc = f'''<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title><style>{full_css(design)}</style></head>
+<title>{esc(title)}</title><style>{full_css(design)}</style></head>
 <body><div class="page">
 <header class="masthead">
-  <div class="kicker">{kicker}</div>
-  <h1>{title}</h1>
-  <div class="subtitle">{subtitle}</div>
+  <div class="kicker">{esc(kicker)}</div>
+  <h1>{esc(title)}</h1>
+  <div class="subtitle">{esc(subtitle)}</div>
   <div class="meta-line">{"".join(meta_items)}</div>
 </header>
 <nav><div class="nav-in">{nav}</div></nav>
 
 <section id="s0">
-  <div class="intro"><p>{intro}</p>
-  <div class="pill-box"><h4>{icon('tag', 13)} 数据口径</h4>{"".join('<span class="pill">%s</span>' % p for p in pills)}</div></div>
+  <div class="intro"><p>{esc(intro)}</p>
+  <div class="pill-box"><h4>{icon('tag', 13)} 数据口径</h4>{"".join('<span class="pill">%s</span>' % esc(p) for p in pills)}</div></div>
   <div class="samples">{"".join(samples)}</div>
 </section>
 
@@ -814,7 +840,7 @@ def build(args):
 <div class="sec-sub">对标不是"看视频学说话"，是系统化采集-拆解-追踪流程</div>
 <h3>{icon('chart')} 1.2 建立对标的五步法</h3>
 <div class="steps">{steps2}</div>
-{('<div class="note"><b>完成度：</b>' + nar["s2_note"] + "</div>") if nar.get("s2_note") else ""}
+{('<div class="note"><b>完成度：</b>' + esc(nar["s2_note"]) + "</div>") if nar.get("s2_note") else ""}
 </section>
 
 <section id="s3"><h2>02 · 达人画像总览</h2>
@@ -822,15 +848,15 @@ def build(args):
 <h3>{icon('chart')} 2.1 账号基本盘</h3>
 <table><tr><th>维度</th><th>数据</th><th>解读</th></tr>{profile_rows}</table>
 <h3>{icon('chat')} 2.2 互动特征：收藏率 vs 评论率</h3>
-<p>藏/赞 {rate_col:.1f}% vs 评/赞 {rate_c:.1f}%。{nar.get("s3_interact", "")}</p>
-{('<div class="note"><b>数据口径提示：</b>' + nar["s3_caveat"] + "</div>") if nar.get("s3_caveat") else ""}
+<p>藏/赞 {rate_col:.1f}% vs 评/赞 {rate_c:.1f}%。{esc(nar.get("s3_interact", ""))}</p>
+{('<div class="note"><b>数据口径提示：</b>' + esc(nar["s3_caveat"]) + "</div>") if nar.get("s3_caveat") else ""}
 <h3>{icon('clock')} 2.3 发布规律</h3>
 <div class="chart-card"><h4>图 1 · 发布时段分布（按小时，{n} 条全量）</h4>
 <div class="src">数据来源：video-analysis/{acc}/manifest.json</div>
 <svg viewBox="0 0 620 130" width="100%" role="img">{hour_svg}</svg></div>
 <div class="chart-grid">{chart_wd}{chart_month}</div>
 <p>{s3_auto}</p>
-{('<div class="ki">' + nar["s3_ki"] + "</div>") if nar.get("s3_ki") else ""}
+{('<div class="ki">' + esc(nar["s3_ki"]) + "</div>") if nar.get("s3_ki") else ""}
 </section>
 
 <section id="s4"><h2>03 · 内容矩阵拆解</h2>
@@ -838,11 +864,11 @@ def build(args):
 <h3>{icon('chart')} 3.1 内容主题结构</h3>
 <div class="chart-grid">{chart_donut}{chart_likes}</div>
 <table><tr><th>内容主题</th><th>条数</th><th>占比</th><th>平均赞</th><th>平均评</th><th>平均藏</th><th>定位</th></tr>{theme_rows}</table>
-{('<div class="note"><b>口径说明：</b>' + nar["s4_note"] + "</div>") if nar.get("s4_note") else ""}
+{('<div class="note"><b>口径说明：</b>' + esc(nar["s4_note"]) + "</div>") if nar.get("s4_note") else ""}
 {('<h3>' + icon_for("爆款公式") + ' 3.2 爆款公式</h3><div class="formula">' + formula_html + "</div>") if formula_html else ""}
 <h3>{icon('fire')} 3.3 爆款 TOP{args.top_n}（真实封面）</h3>
 <table><tr><th></th><th>点赞</th><th>收藏</th><th>评论</th><th>分享</th><th>日期</th><th>标题</th></tr>{top_rows}</table>
-{('<div class="ki">' + nar["s4_ki"] + "</div>") if nar.get("s4_ki") else ""}
+{('<div class="ki">' + esc(nar["s4_ki"]) + "</div>") if nar.get("s4_ki") else ""}
 {('<h3>' + icon_for("关键帧画面") + ' 3.4 爆款关键帧切片</h3><div class="fgallery">' + frame_cards + "</div>") if frame_cards else ""}
 {('<h3>' + icon_for("tag标签") + ' 3.5 各内容主题代表画面</h3><div class="fgallery">' + theme_frames + "</div>") if theme_frames else ""}
 </section>
@@ -884,6 +910,9 @@ def main():
     ap.add_argument("--frames-n", type=int, default=8)
     ap.add_argument("--img-cap-kb", type=int, default=400)
     a = ap.parse_args()
+    if not os.path.isabs(a.out):
+        # 相对 --out 一律落运行根，避免随调用方 cwd 漂移把报告写进父目录
+        a.out = os.path.join(a.root, a.out)
     page, stat = build(a)
     out_dir = os.path.dirname(os.path.abspath(a.out))
     os.makedirs(out_dir, exist_ok=True)

@@ -57,7 +57,8 @@ def frame_workers():
     """抽帧是 CPU-bound。按核数封顶，并按可用内存封顶防 OOM（每 worker 峰值约 1.2GB）。"""
     cores = cpus()
     m = mem()
-    mem_cap = max(1, int(m["avail_gb"] / 1.2)) if m["avail_gb"] > 1 else 8
+    # avail<=1GB 时旧版回退 8 与"内存越少 worker 越少"语义相反；低内存宁可单进程慢跑
+    mem_cap = max(1, int(m["avail_gb"] / 1.2)) if m["avail_gb"] > 1 else 1
     return max(1, min(cores, 4, mem_cap))
 
 

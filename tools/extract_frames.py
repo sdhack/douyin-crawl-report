@@ -40,7 +40,8 @@ def extract(mp4, out_dir, fps, review_fps, scene_threshold, needs_review, min_fr
         step = min(regular_step, coverage_step)
         idx = 0
         for frame in c.decode(video=0):
-            t = float(frame.time or idx / rate)
+            # frame.time=0.0 是合法首帧时间戳，须显式判 None（or 会把 0 当缺失回退 idx/rate）
+            t = float(frame.time) if frame.time is not None else idx / rate
             img = frame.to_image()
             thumb = np.asarray(img.resize((64, 36)).convert("L"), dtype=np.float32)
             hist, _ = np.histogram(thumb, bins=32, range=(0, 256), density=True)
@@ -64,8 +65,8 @@ def extract(mp4, out_dir, fps, review_fps, scene_threshold, needs_review, min_fr
             json.dump({"adaptive": True, "completed": True, "config": config,
                        "needs_visual_review": needs_review, "frames": records}, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"  {mp4}: ERR {str(e)[:80]}")
-        return 0
+        print(f"  {mp4}: ERR {str(e)[:80]}", flush=True)
+        return -1  # 解码失败须与合法 0 帧区分，供 main 聚合后 fail-loud
     return n
 
 
@@ -87,9 +88,11 @@ def main():
     ap.add_argument("--workers", type=int, default=None,
                     help="并行进程数（缺省按机器配置自动调度 min(核,4) 且受可用内存约束）")
     a = ap.parse_args()
+    if a.fps <= 0 or a.review_fps <= 0:
+        sys.exit("[ERR] --fps / --review-fps 必须为正数（0 会触发除零并被吞掉，视频静默 0 帧）")
 
     w = a.workers or probe.frame_workers()
-    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 抽帧进程数={w}")
+    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 抽帧进程数={w}", flush=True)
 
     vd = os.path.join(a.root, "videos", a.account)
     fd = os.path.join(a.root, "video-analysis", a.account, "frames")
@@ -104,12 +107,24 @@ def main():
              for mp4 in sorted(glob.glob(os.path.join(vd, "*.mp4")))]
 
     from multiprocessing import Pool
-    total, n0 = 0, len(tasks)
+    total, n0, failed = 0, len(tasks), []
     with Pool(w) as pool:
         for done, (aid, n) in enumerate(pool.imap_unordered(_worker, tasks), 1):
-            total += n
-            print(f"  [{done}/{n0}] {aid}: {n} 帧")
-    print(f"\n[完成] {n0} 视频，共 {total} 帧（进程数 {w}）")
+            if n < 0:
+                failed.append(aid)
+                print(f"  [{done}/{n0}] {aid}: ERR 解码失败", flush=True)
+            else:
+                total += n
+                print(f"  [{done}/{n0}] {aid}: {n} 帧", flush=True)
+    print(f"\n[完成] {n0} 视频，共 {total} 帧（进程数 {w}）", flush=True)
+    if failed:
+        # 下载截断的 MP4 会让解码中途崩（jpg 落一半、无 frames.json），此前静默 exit 0，
+        # 下游逐帧分析把该视频当 0 帧吞掉；必须 fail-loud 让用户重下再补抽
+        print(f"[ERR] {len(failed)} 个视频解码失败（无 frames.json，下游会整体跳过）：", flush=True)
+        for aid in sorted(failed):
+            print(f"      {aid}", flush=True)
+        print("      处置：删除对应 videos/<account>/<aid>.mp4 后重跑 download.py，再重跑本工具（断点续抽）", flush=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

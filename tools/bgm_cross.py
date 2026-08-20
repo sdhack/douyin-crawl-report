@@ -33,7 +33,9 @@ def main():
 
     bgmd = {}
     for f in glob.glob(os.path.join(a.root, "bgm", a.account, "*.json")):
-        if "_manifest" in os.path.basename(f):
+        # 跳过 _ 前缀内部文件（_manifest/_cross 等）：_cross 是本工具自己的产物，
+        # 无 aweme_id，重跑/增量跑时混入会 KeyError 崩溃
+        if os.path.basename(f).startswith("_"):
             continue
         j = json.load(open(f, encoding="utf-8"))
         bgmd[j["aweme_id"]] = j
@@ -71,22 +73,27 @@ def main():
         "vocal": bgmd.get(r["aweme_id"], {}).get("vocal", "?"),
     } for r in top]
 
-    # summary：关键对比
+    # summary：关键对比（分母均值为 0 时该倍数无意义，省略该键而非除零崩溃）
+    def _mult(num, den):
+        return round(num / den, 1) if den else None
+
     L = out["by_level"]
     no, lt = L.get("none"), L.get("light")
     if no and lt:
-        out["summary"] = {
-            "light_vs_none_like_mult": round(lt["avg_likes"] / no["avg_likes"], 1),
-            "light_vs_none_collect_mult": round(lt["avg_collects"] / no["avg_collects"], 1),
-            "light_vs_none_share_mult": round(lt["avg_shares"] / no["avg_shares"], 1),
+        summary = {
+            "light_vs_none_like_mult": _mult(lt["avg_likes"], no["avg_likes"]),
+            "light_vs_none_collect_mult": _mult(lt["avg_collects"], no["avg_collects"]),
+            "light_vs_none_share_mult": _mult(lt["avg_shares"], no["avg_shares"]),
         }
+        out["summary"] = {k: v for k, v in summary.items() if v is not None}
 
     op = os.path.join(a.root, "bgm", a.account, "_cross.json")
     json.dump(out, open(op, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"[bgm_cross] {a.account}: n={out['n']} top={len(out['top_n'])}")
     if "summary" in out:
         s = out["summary"]
-        print(f"  轻BGM/纯口播 均赞×{s['light_vs_none_like_mult']} 收藏×{s['light_vs_none_collect_mult']} 分享×{s['light_vs_none_share_mult']}")
+        print("  轻BGM/纯口播 " + " ".join(
+            f"{k.rsplit('_', 2)[0].replace('light_vs_none_', '')}×{v}" for k, v in s.items()))
     print(f"[manifest] {op}")
 
 def sys_exit(msg):

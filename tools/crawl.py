@@ -163,7 +163,7 @@ def _current_run(parent, slug):
     return max(candidates, key=os.path.getmtime) if candidates else None
 
 
-def _acquire_run_lock(parent, slug, timeout=30):
+def _acquire_run_lock(parent, slug, timeout=30, stale_after=600):
     lock = os.path.join(parent, f".douyin-crawl-{slug}.lock")
     deadline = time.time() + timeout
     while True:
@@ -171,6 +171,16 @@ def _acquire_run_lock(parent, slug, timeout=30):
             os.mkdir(lock)
             return lock
         except FileExistsError:
+            # 崩溃残留的 stale 锁（持有者已死）会永久阻塞后续 Agent；
+            # 超过 stale_after 秒无更新则视为陈旧并接管
+            try:
+                age = time.time() - os.path.getmtime(lock)
+                if age > stale_after:
+                    import shutil
+                    shutil.rmtree(lock, ignore_errors=True)
+                    continue
+            except OSError:
+                pass
             if time.time() >= deadline:
                 sys.exit(f"[ERR] 等待其他 Agent 创建运行目录超时：{lock}")
             time.sleep(0.2)
@@ -187,10 +197,14 @@ def make_run_dir(parent, slug, explicit=None, new_run=False):
     """Resolve one cross-agent run root; only --new-run opens another collection session."""
     if explicit:
         path = os.path.abspath(explicit)
-        os.makedirs(path, exist_ok=True)
-        if os.listdir(path) and not _existing_run(path, slug):
-            sys.exit(f"[ERR] --run-dir 已存在但不是账号 {slug} 的运行目录：{path}")
         parent = os.path.dirname(path)
+        lock = _acquire_run_lock(parent, slug)
+        try:
+            os.makedirs(path, exist_ok=True)
+            if os.listdir(path) and not _existing_run(path, slug):
+                sys.exit(f"[ERR] --run-dir 已存在但不是账号 {slug} 的运行目录：{path}")
+        finally:
+            _release_run_lock(lock)
     else:
         parent = os.path.abspath(parent)
         if os.path.isdir(parent) and _existing_run(parent, slug):
@@ -236,7 +250,13 @@ def validate_save_dir(run_root, account, save_dir):
 
 
 def _patch_verify(p, marker, pat, new):
-    """正则替换 MediaCrawler base_config 变量为 env 覆盖版，并回读验证生效（防静默假成功）。"""
+    """正则替换 MediaCrawler base_config 变量为 env 覆盖版，并回读验证生效（防静默假成功）。
+
+    pat 必须行首锚定到目标变量名（(?m)^VAR...），且空白匹配只能用 [ \\t] 不能用
+    \\s——\\s 会吞掉行尾换行连吃后续空行/注释行（实测 150 行被吃成 148 行）。
+    历史教训——无锚定的 \\d+ 分支曾把全文件所有数字字面量（coding 声明/端口号/
+    注释行号）一并替换，导致 base_config.py 无法导入。此处再以"仅允许 1 行变更"
+    做二次误伤防护。"""
     src = open(p, encoding="utf-8-sig").read()
     if marker in src:
         return "already"
@@ -248,8 +268,12 @@ def _patch_verify(p, marker, pat, new):
             src = "import os\n" + src
         if not re.search(pat, src):
             return "no-var"
-        src = re.sub(pat, new, src)
-        open(p, "w", encoding="utf-8", newline="").write(src)
+        patched = re.sub(pat, new, src, count=1)
+        old_l, new_l = src.splitlines(), patched.splitlines()
+        changed = sum(1 for x, y in zip(old_l, new_l) if x != y) + abs(len(old_l) - len(new_l))
+        if changed > 1:
+            return "verify-failed"
+        open(p, "w", encoding="utf-8", newline="").write(patched)
         # 回读校验：补丁必须真正落盘，否则报失败而非假装成功
         return "patched" if marker in open(p, encoding="utf-8").read() else "verify-failed"
     except Exception:
@@ -263,7 +287,7 @@ def ensure_mc_sleep_patch(mc_root):
     p = os.path.join(mc_root, "config", "base_config.py")
     if not os.path.isfile(p):
         return None
-    pat = r"CRAWLER_MAX_SLEEP_SEC\s*=\s*(?:int|float)\([^)]*\)|\d+(?:\.\d+)?"
+    pat = r"(?m)^CRAWLER_MAX_SLEEP_SEC[ \t]*=[ \t]*\d+(?:\.\d+)?[ \t]*(?:#.*)?$"
     return _patch_verify(p, "MC_SLEEP_SEC", pat,
                          'CRAWLER_MAX_SLEEP_SEC = float(os.getenv("MC_SLEEP_SEC", "10"))')
 
@@ -274,7 +298,7 @@ def ensure_mc_comments_patch(mc_root):
     p = os.path.join(mc_root, "config", "base_config.py")
     if not os.path.isfile(p):
         return None
-    pat = r"CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES\s*=\s*\d+"
+    pat = r"(?m)^CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES[ \t]*=[ \t]*\d+(?:\.\d+)?[ \t]*(?:#.*)?$"
     return _patch_verify(p, "MC_COMMENTS_COUNT", pat,
                          'CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES = int(float(os.getenv("MC_COMMENTS_COUNT", "10")))')
 
@@ -308,6 +332,54 @@ def ensure_mc_creator_limit_patch(mc_root):
         patched = src.replace(needle, block, 1)
         if "\nimport os\n" not in patched:
             patched = patched.replace("import asyncio\n", "import asyncio\nimport os\n", 1)
+        with open(p, "w", encoding="utf-8", newline="") as f:
+            f.write(patched)
+        return "patched" if marker in open(p, encoding="utf-8").read() else "verify-failed"
+    except Exception:
+        return "write-failed"
+
+
+def ensure_mc_creator_profile_patch(mc_root):
+    """save_creator 落作品/粉丝计数（不含昵称等隐私字段）到 MC_CREATOR_PROFILE_DIR，
+    供抓取后核对主页作品数，防「--max 裁剪 + 翻页中断」造成的静默漏抓。"""
+    p = os.path.join(mc_root, "store", "douyin", "__init__.py")
+    if not os.path.isfile(p):
+        return "missing-store"
+    src = open(p, encoding="utf-8").read()
+    marker = "MC_CREATOR_PROFILE_DIR"
+    if marker in src:
+        return "already"
+    needle = ('async def save_creator(user_id: str, creator: Dict):\n'
+              '    # 教学版：创作者个人资料(昵称/性别/头像/签名/IP/粉丝数等)不再落库，防骚扰。\n'
+              '    return')
+    if needle not in src:
+        return "unsupported-version"
+    block = ('async def save_creator(user_id: str, creator: Dict):\n'
+             '    # 教学版：创作者个人资料(昵称/性别/头像/签名/IP/粉丝数等)不再落库，防骚扰。\n'
+             '    # v0.6.8: 仅落公开计数(作品/粉丝/获赞)供 crawl.py 核对主页作品数，防静默漏抓\n'
+             '    try:\n'
+             '        import json as _json, os as _os\n'
+             '        d = _os.environ.get("MC_CREATOR_PROFILE_DIR", "")\n'
+             '        if d:\n'
+             '            u = creator.get("user") if isinstance(creator.get("user"), dict) else creator\n'
+             '            counts = {\n'
+             '                "aweme_count": u.get("aweme_count"),\n'
+             '                "follower_count": u.get("follower_count"),\n'
+             '                "total_favorited": u.get("total_favorited"),\n'
+             '                "sec_uid": u.get("sec_uid"),\n'
+             '            }\n'
+             '            _os.makedirs(d, exist_ok=True)\n'
+             '            with open(_os.path.join(d, "creator_profile.json"), "w", encoding="utf-8") as f:\n'
+             '                _json.dump(counts, f, ensure_ascii=False, indent=2)\n'
+             '    except Exception:\n'
+             '        pass\n'
+             '    return')
+    try:
+        bak = p + ".profile.bak"
+        if not os.path.exists(bak):
+            with open(bak, "w", encoding="utf-8") as f:
+                f.write(src)
+        patched = src.replace(needle, block, 1)
         with open(p, "w", encoding="utf-8", newline="") as f:
             f.write(patched)
         return "patched" if marker in open(p, encoding="utf-8").read() else "verify-failed"
@@ -399,41 +471,42 @@ def tee_run(py, main_args, mc_root, log_path, env, timeout=None, progress=None):
         proc.terminate()
         proc.wait()
         print(f"[超时] 抓取超过 {timeout} 秒，已终止（可用 --max-min 调大重试）")
+        t.join(5)
         return -9
     t.join()
     return rc
 
 
-def newest_raw(save_dir):
-    files = glob.glob(os.path.join(save_dir, "**", "*.jsonl"), recursive=True)
-    files = [f for f in files if "contents" in os.path.basename(f)]
-    if not files:
-        return None
-    return max(files, key=os.path.getmtime)
+def raw_contents_files(save_dir):
+    """所有 contents JSONL（跨天续跑会产生多个日期文件），按 mtime 旧→新返回，合并去重不丢旧数据。"""
+    files = glob.glob(os.path.join(save_dir, "**", "*contents*.jsonl"), recursive=True)
+    return sorted(files, key=os.path.getmtime)
 
 
-def filter_dedup(raw, out, keyword, hard_limit=None):
+def filter_dedup(raws, out, keyword, hard_limit=None):
+    """合并多个 contents 文件（跨天续跑）按 aweme_id 去重；hard_limit 按主页返回顺序硬截断。"""
     kw = keyword
     seen, rows, counts = set(), [], {"total": 0, "matched": 0, "unique_before_limit": 0, "unique": 0}
-    with open(raw, encoding="utf-8") as fi:
-        for line in fi:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                j = json.loads(line)
-            except Exception:
-                continue
-            counts["total"] += 1
-            blob = (j.get("desc") or "") + "|" + (j.get("nickname") or "") + "|" + (j.get("author_word") or "")
-            if kw and kw not in blob:
-                continue
-            counts["matched"] += 1
-            aid = j.get("aweme_id")
-            if not aid or aid in seen:
-                continue
-            seen.add(aid)
-            rows.append(j)
+    for raw in raws:
+        with open(raw, encoding="utf-8") as fi:
+            for line in fi:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    j = json.loads(line)
+                except Exception:
+                    continue
+                counts["total"] += 1
+                blob = (j.get("desc") or "") + "|" + (j.get("nickname") or "") + "|" + (j.get("author_word") or "")
+                if kw and kw not in blob:
+                    continue
+                counts["matched"] += 1
+                aid = j.get("aweme_id")
+                if not aid or aid in seen:
+                    continue
+                seen.add(aid)
+                rows.append(j)
     counts["unique_before_limit"] = len(rows)
     if hard_limit is not None:
         rows = rows[:hard_limit]
@@ -517,6 +590,12 @@ def main():
             sys.exit(f"[ERR] MediaCrawler creator 硬上限补丁失败({limit_patch})；无法保证 --max={a.max}，停止抓取。")
         env["MC_CREATOR_MAX_COUNT"] = str(a.max)
         print(f"[主页硬上限] {limit_patch}：最多保存 {a.max} 条，达到后立即停止翻页")
+        profile_patch = ensure_mc_creator_profile_patch(mc_root)
+        if profile_patch in ("patched", "already"):
+            env["MC_CREATOR_PROFILE_DIR"] = a.save_dir
+            print(f"[作品数核对] {profile_patch}：抓取后将比对主页 aweme_count 防漏抓")
+        else:
+            print(f"[作品数核对] 补丁未生效({profile_patch})，本次无法自动核对主页作品数")
 
     # —— 随机延时落地：给 MediaCrawler base_config 打 env 补丁，抓取间隔由 MC_SLEEP_SEC 覆盖 ——
     if a.sleep_min is not None:
@@ -578,38 +657,66 @@ def main():
         print(f"[停止] MediaCrawler 退出码 {rc}；不执行任何兜底方案。请修复 MediaCrawler 后重试。")
         sys.exit(rc or 1)
 
-    # —— 产物判定：detail+get_comment 看 detail_comments_*.jsonl（勿用账号关键词过滤，会误删评论） ——
-    comment_mode = (a.mode == "detail") and a.get_comment
-    if comment_mode:
-        cps = glob.glob(os.path.join(a.save_dir, "**", "detail_comments*.jsonl"), recursive=True)
+    # —— 产物判定：开评论时先校验评论产物（MediaCrawler 文件名前缀 = {mode}_comments），
+    # 缺失即失败，不静默降级；随后无论何种模式都走 contents 合并去重，产出 dedup 文件 ——
+    comment_files = []
+    if a.get_comment:
+        cps = glob.glob(os.path.join(a.save_dir, "**", f"{a.mode}_comments*.jsonl"), recursive=True)
         if not cps:
-            print("[提示] 未发现 detail_comments_*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
+            progress.finish(False, f"评论抓取已开启但未发现 {a.mode}_comments_*.jsonl")
+            print(f"[ERR] 已开启评论抓取（--comments-count {a.comments_count}）但未发现 {a.mode}_comments_*.jsonl；"
+                  "请检查登录态/风控后重试，或显式 --no-comment。详见 crawl.log。")
             sys.exit(rc or 1)
+        comment_files = sorted(cps)
         print("=" * 70)
-        print(f"[评论产物] {len(cps)} 个 detail_comments_*.jsonl：")
-        for f in sorted(cps):
+        print(f"[评论产物] {len(cps)} 个 {a.mode}_comments_*.jsonl：")
+        for f in comment_files:
             print("  " + f)
-        progress.finish(True, f"评论抓取完成：文件={len(cps)}")
-        print(f"[下一阶段] runtime.py run --tool comments.py --root \"{a.root}\" --account \"{a.account}\" --max {a.comments_count}")
-        sys.exit(0)
 
-    raw = newest_raw(a.save_dir)
-    if not raw:
+    raws = raw_contents_files(a.save_dir)
+    if not raws:
         progress.finish(False, "抓取结束但未发现 contents JSONL")
-        print("[提示] save_dir 下未发现 *_contents*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
+        print("[提示] save_dir 下未发现 *contents*.jsonl；请检查登录态/风控，重试或看 crawl.log。")
         sys.exit(rc or 1)
 
     # Account slug is a storage key, never a content filter. Filter only when explicitly requested.
     kw = a.kw
     filtered = os.path.join(a.save_dir, f"{a.account}_dedup.jsonl")
-    counts = filter_dedup(raw, filtered, kw, hard_limit=a.max if a.mode == "creator" else None)
+    counts = filter_dedup(raws, filtered, kw, hard_limit=a.max if a.mode == "creator" else None)
+
+    # —— 主页作品数核对（防静默漏抓：--max 裁剪、翻页中断、detail 签名失败都会漏）——
+    if a.mode == "creator":
+        aweme_total = None
+        try:
+            with open(os.path.join(a.save_dir, "creator_profile.json"), encoding="utf-8") as f:
+                aweme_total = json.load(f).get("aweme_count")
+        except Exception:
+            aweme_total = None
+        if isinstance(aweme_total, int) and aweme_total > 0:
+            print(f"[核对] 主页作品总数={aweme_total} | 实际抓取唯一={counts['unique']}")
+            if counts["unique"] < aweme_total:
+                missing = aweme_total - counts["unique"]
+                if counts["unique"] >= a.max:
+                    print(f"[警告] 抓取 {counts['unique']} 条已达 --max={a.max} 上限，仍少于主页 {aweme_total} 条；"
+                          f"调大 --max 重跑即可断点续传补 {missing} 条。")
+                else:
+                    progress.finish(False, f"漏抓：唯一={counts['unique']} < 主页={aweme_total}（未达上限）")
+                    print(f"[ERR] 漏抓 {missing} 条（唯一 {counts['unique']} < 主页 {aweme_total}，且未达 --max 上限）。"
+                          "请检查 crawl.log 的翻页/签名错误后重试；本次结果不完整，禁止直接进入报告阶段。")
+                    sys.exit(1)
+        else:
+            print("[核对] 未获取主页作品总数（creator_profile.json 缺失或 aweme_count 无效），跳过核对")
+
     progress.finish(bool(counts["unique"]), f"抓取完成：原始={counts['total']} 唯一={counts['unique']}")
     print("=" * 70)
-    print(f"[原始文件] {raw}")
+    for raw in raws:
+        print(f"[原始文件] {raw}")
     print(f"[去重文件] {filtered}")
     print(f"[统计] 引擎原始 {counts['total']} 行 | 匹配 {counts['matched']} | 去重 {counts['unique_before_limit']} | 最终保留 {counts['unique']} / 上限 {a.max if a.mode == 'creator' else '不适用'}")
     print("-" * 70)
     print(f"[下一阶段] runtime.py run --tool process.py --root \"{a.root}\" --account \"{a.account}\" --json \"{filtered}\"")
+    if comment_files:
+        print(f"[下一阶段] runtime.py run --tool comments.py --root \"{a.root}\" --account \"{a.account}\" --max {a.comments_count}")
     sys.exit(0 if counts["unique"] else 1)
 
 

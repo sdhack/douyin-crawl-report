@@ -28,7 +28,7 @@ def manifest_items(root, account):
 
 def cached_audio(root, account, aweme_id, url):
     if not url:
-        raise RuntimeError("missing music_download_url")
+        raise RuntimeError("missing audio URL (manifest.music_url / music_download_url)")
     audio_dir = os.path.join(root, "bgm", account, "audio")
     os.makedirs(audio_dir, exist_ok=True)
     path = os.path.join(audio_dir, aweme_id + ".mp3")

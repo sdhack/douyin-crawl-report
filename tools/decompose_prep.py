@@ -59,7 +59,12 @@ def main():
 
     comp = {}
     cpath = os.path.join(root, "video-analysis", acct, "comments.json")
-    comments = json.load(open(cpath, encoding="utf-8")).get("by_aweme", {}) if os.path.isfile(cpath) else {}
+    comments = {}
+    if os.path.isfile(cpath):
+        try:
+            comments = json.load(open(cpath, encoding="utf-8")).get("by_aweme", {})
+        except Exception:
+            comments = {}  # 半截/损坏 comments.json 按缺源处理，不中断全量档案生成
 
     covered = 0
     for r in manifest:
@@ -70,7 +75,9 @@ def main():
         full = "".join((s.get("text") or "").strip() for s in segs) or t.get("text") or ""
         fdir = os.path.join(root, "video-analysis", acct, "frames", aid)
         kf = key_frames(fdir) if os.path.isdir(fdir) else []
-        image_count = len(glob.glob(os.path.join(fdir, "*.jpg"))) if os.path.isdir(fdir) else 0
+        # 与 key_frames 同口径（.jpg/.jpeg/.png/.webp），避免 frame_count 偏小
+        image_count = len([f for f in os.listdir(fdir)
+                           if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]) if os.path.isdir(fdir) else 0
         visual_path = os.path.join(fdir, "visual-summary.json")
         try:
             visual = json.load(open(visual_path, encoding="utf-8")) if os.path.isfile(visual_path) else None
@@ -89,7 +96,8 @@ def main():
             "comment_count": r.get("comments", 0),  # 该视频的评论总数（互动指标）
             "collects": r.get("collects", 0),
             "shares": r.get("shares", 0),
-            "duration_sec": round(t.get("duration") or b.get("duration_sec") or image_count, 1),
+            # 时长只认转写/BGM 的真实秒数；帧数≠秒数（scene/intro 补帧会虚高），缺源记 0
+            "duration_sec": round(t.get("duration") or b.get("duration_sec") or 0, 1),
             "transcript": full,
             "bgm_level": b.get("bgm_level", "?"),
             "mood": b.get("mood", "?"),

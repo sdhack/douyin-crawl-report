@@ -62,7 +62,8 @@ def registered_py():
             data = json.load(f)
     except Exception:
         return None
-    return data.get("keys", {}).get(KEY, {}).get("python")
+    p = data.get("keys", {}).get(KEY, {}).get("python")
+    return p if p and os.path.isfile(p) else None
 
 
 def _reg_get(key):

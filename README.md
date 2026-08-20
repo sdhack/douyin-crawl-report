@@ -5,7 +5,7 @@
 把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.6.4-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.6.8-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -229,6 +229,10 @@ douyin-crawl-report/
 
 ## 更新日志
 
+- **v0.6.8（2026-08-21）**：48 条全量复测（14→48 断点增量）抓取核对与静默降级修复。① 抓取完整性核对：MediaCrawler `save_creator` 补丁落公开计数（作品/粉丝/获赞，无昵称隐私字段）到 `creator_profile.json`，`crawl.py` 抓后比对唯一视频数与主页 `aweme_count`——未达上限即漏抓时直接 `exit(1)` 阻止残缺数据进入报告阶段，达 `--max` 上限仍不足则明确提示调大重跑。② `extract_frames.py` 解码失败 fail-loud：下载截断的 MP4 会让 PyAV 中途崩（jpg 落一半、无 frames.json），此前静默按 0 帧 + exit 0 放行，下游把该视频当 0 帧吞掉；现聚合失败清单并 `exit(1)`，附重下处置指引。③ `bgm_cross.py` 重跑崩溃：自身产物 `_cross.json` 落在 BGM 归档目录，二次运行时被当视频数据加载致 `KeyError: aweme_id`；现跳过所有 `_` 前缀内部文件。④ `transcribe.py`/`transcribe_bgm.py`/`extract_frames.py`/`download.py` 进度 print 补齐 `flush=True`（v0.6.7 只修了 `analyze_frames.py`，其余长时后台任务重定向日志仍全程不可见）。实测：48 条增量重跑全链路（含 1 条损坏视频重下补抽）无死循环、无静默漏抓，总帧数 6910、逐帧分析与口播转写 48/48。
+- **v0.6.7（2026-08-21）**：全流程实测（14 视频真实账号）性能与产物路径修复。`analyze_frames.py` 由单进程逐帧串行改为进程池并行（按核数/内存封顶 8 worker，帧间无共享状态）并支持断点续帧（`analysis` 已存在的帧直接复用）——旧版每帧起一个 tesseract 子进程实测约 2s/帧，14 视频 3559 帧需约 2 小时，并行后 11.5 分钟完成（提速约 8.6×）；进度 print 全部 `flush=True` 修复重定向日志下逐条进度不可见。`report_html.py` 相对 `--out` 一律解析到 `--root` 运行根下，不再随调用方 cwd 漂移污染父目录。
+- **v0.6.6（2026-08-20）**：第二轮全链路审计修复（3 组并行深审 + 跨工具契约核验，35 项发现甄别后修 17 项）。关键修复：`report_html.py` 点赞直方图分箱边界（0 赞视频曾落入"10万+"档）与 TOP 榜裸 `fromtimestamp` 崩溃点、SVG 标签转义；`account_metrics.py` 空数据 `max()` 崩溃与全 0 赞除零；`comments.py`/`transcribe_bgm.py` 落盘改原子写；`decompose_prep.py` 半截 comments.json 容错、帧数不再冒充时长；`extract_frames.py` `--fps 0` 校验与 `frame.time` falsy 陷阱；`probe.py` 低内存回退方向反转修正；`crawl.py` 运行锁 stale 检测接管。新增 26 项第二轮回归测试并用真实账号数据交叉验证分布图逐档正确。
+- **v0.6.5（2026-08-20）**：全链路流程 bug 大修。修复 MediaCrawler 补丁正则 `\s` 跨行吞注释 bug（`MC_SLEEP_SEC`/`MC_COMMENTS_COUNT` 环境变量此前从未生效），恢复被旧版无锚定正则污染的 `base_config.py` 并以"仅 2 行差异"重打补丁；`comments.py` 修复 creator 模式评论文件漏读并新增 comment_id/(内容,昵称) 双键去重；`process.py` 跨天 contents 全合并且排除评论文件；`download.py` 改 `.part` 原子下载；`analyze_frames.py` 修复中文路径读取；`transcribe_bgm.py` 修复唱词误判；`bgm_cross.py` 除零防护；`report_html.py` 补齐 20+ 处 HTML 转义堵 XSS；`patch_mediacrawler.py` 打补丁前先备份。新增补丁/选源/XSS/全槽位四组回归测试。
 - **v0.6.4（2026-08-19）**：根据多 Agent 真实产物目录回归优化；父目录新增当前运行指针和跨 Agent 创建锁，默认自动复用最近有效运行根，只有 `--new-run` 才新建，避免同级/嵌套空目录与重复日志。
 - **v0.6.3（2026-08-19）**：修复评论补抓和续跑重复创建嵌套时间戳目录；新增运行根标记，整轮采集统一复用一个目录、一份 `run.log` 和一份 `run-state.json`。
 - **v0.6.2（2026-08-19）**：建立中文发布规范；Git Commit 信息必须使用中文，每次提交必须同步更新 README 的版本或更新日志。

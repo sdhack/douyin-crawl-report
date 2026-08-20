@@ -59,7 +59,7 @@
 5. `bgm_cross.py`：BGM×互动交叉 → `bgm/<account>/_cross.json`。
 5. （如需评论区）`comments.py`：`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N → `video-analysis/<account>/comments.json`
 
-**提速要点**：下载/抽帧/转写均按产物存在性跳过已完成项，换新数据只跑增量；下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
+**提速要点**：下载/抽帧/转写均按产物存在性跳过已完成项，换新数据只跑增量；下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU；逐帧画面分析用进程池并行（按核数/内存封顶 8）且按 `analysis` 字段断点续帧，中断重跑只补增量。
 
 ## 阶段 4：报告生成（report_html.py，v2 固定骨架直出 HTML）
 

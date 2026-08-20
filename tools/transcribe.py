@@ -36,7 +36,7 @@ def load_terms(path):
             d = json.load(f)
         return {k: v for k, v in d.items() if k and v and k != v}
     except Exception as e:
-        print(f"[warn] --map 解析失败，忽略: {e}")
+        print(f"[warn] --map 解析失败，忽略: {e}", flush=True)
         return None
 
 
@@ -106,22 +106,41 @@ def main():
             n_fix = sum(rewrite_corrected(os.path.join(od, m[0] + ".txt"),
                                           os.path.join(od, m[0] + ".json"),
                                           terms) for m in inputs)
-            print(f"[skip-all] {len(inputs)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}")
+            print(f"[skip-all] {len(inputs)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}", flush=True)
         else:
-            print(f"[skip-all] {len(inputs)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}")
+            print(f"[skip-all] {len(inputs)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}", flush=True)
         return
 
     pending = [m for m in inputs if prod_missing(m)]
     device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
     compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
-    print(f"[env] cuda_count={has_cuda}")
+    print(f"[env] cuda_count={has_cuda}", flush=True)
     w = a.workers or probe.transcribe_workers(has_cuda)
-    print(f"[资源] {probe.snapshot(has_cuda)} -> device={device}/{compute}，转写worker数={w}")
+    print(f"[资源] {probe.snapshot(has_cuda)} -> device={device}/{compute}，转写worker数={w}", flush=True)
 
     from faster_whisper import WhisperModel
-    model = WhisperModel(a.model, device=device, compute_type=compute)
+
+    def load_model(path, dev, comp):
+        """技能承诺的自动降级：float16 不被卡/CUDA 后端支持时按
+        int8_float32 -> CPU int8 逐级回退（此前从未实现，实测直接 ValueError 崩溃）"""
+        try:
+            return WhisperModel(path, device=dev, compute_type=comp), dev, comp
+        except (ValueError, RuntimeError, OSError) as e:
+            if dev == "cuda" and comp == "float16":
+                print(f"[warn] float16 不受支持({str(e)[:60]})，降级 int8_float32 重试", flush=True)
+                try:
+                    return WhisperModel(path, device="cuda", compute_type="int8_float32"), "cuda", "int8_float32"
+                except (ValueError, RuntimeError, OSError):
+                    pass
+            if dev == "cuda":
+                print("[warn] CUDA 后端不可用，回退 CPU int8", flush=True)
+                return WhisperModel(path, device="cpu", compute_type="int8"), "cpu", "int8"
+            raise
+
+    model, device, compute = load_model(a.model, device, compute)
+    print(f"[model] 实际生效 device={device}/{compute}", flush=True)
     if terms:
-        print(f"[map] 术语纠错映射已启用：{len(terms)} 项")
+        print(f"[map] 术语纠错映射已启用：{len(terms)} 项", flush=True)
 
     def one(item):
         aid, url = item
@@ -157,16 +176,16 @@ def main():
         except Exception as e:
             return aid, f"ERR {str(e)[:80]}"
 
-    print(f"[start] {len(pending)} videos -> {od} ({device}, {w} workers)")
+    print(f"[start] {len(pending)} videos -> {od} ({device}, {w} workers)", flush=True)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
         futs = {ex.submit(one, item): item for item in pending}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()
             results.append(note)
-            print(f"  [{i}/{len(pending)}] {aid}: {note}")
+            print(f"  [{i}/{len(pending)}] {aid}: {note}", flush=True)
     errs = [r for r in results if r.startswith("ERR")]
-    print(f"[done] total={len(pending)} ok={len(pending)-len(errs)} err={len(errs)}")
+    print(f"[done] total={len(pending)} ok={len(pending)-len(errs)} err={len(errs)}", flush=True)
     if errs:
         sys.exit(1)
 

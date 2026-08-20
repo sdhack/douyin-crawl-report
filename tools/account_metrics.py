@@ -24,9 +24,17 @@ def main():
     if not a.root or not a.account:
         ap.error("需要 --root <根> --account <slug>")
     base = os.path.join(a.root, "decompose", a.account)
-    vp = json.load(open(os.path.join(base, "video_profiles.json"), encoding="utf-8"))
+    vp_path = os.path.join(base, "video_profiles.json")
+    if not os.path.isfile(vp_path):
+        ap.error("缺少 %s（先跑 decompose_prep.py）" % vp_path)
+    try:
+        vp = json.load(open(vp_path, encoding="utf-8"))
+    except Exception as e:
+        ap.error("video_profiles.json 解析失败: %s" % e)
     vids = list(vp.values())
     n = len(vids)
+    if not vids:
+        ap.error("video_profiles.json 为空，无视频可分析")
 
     # ---------- 1) 发布节奏 ----------
     dates = sorted(v for v in (v.get("create_time") for v in vids) if v)
@@ -96,7 +104,8 @@ def main():
         "分享率中位": round(statistics.median(srs), 3) if srs else 0,
         "收藏率中位": round(statistics.median(crs), 3) if crs else 0,
         "评论率中位": round(statistics.median(mrs), 3) if mrs else 0,
-        "最高赞单条占比": "%d%%" % round(top1 / total * 100),
+        # 全 0 赞账号 total=0，除零防护：占比记 0 而非崩溃
+        "最高赞单条占比": "%d%%" % round(top1 / total * 100) if total else "0%",
         "解读": "三个比率越低 = 互动越集中在点赞/浏览，评论区与收藏驱动弱（结合讨论型是否命中判断存在性）",
     }
     interact = {

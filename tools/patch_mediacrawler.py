@@ -108,6 +108,9 @@ def main():
     count = src.count(OLD_METHOD)
     if count != 1:
         sys.exit(f"[ERR] 期望匹配 1 处旧方法，实际 {count} 处——可能已打过补丁或版本不同")
+    bak = client + ".cursor.bak"
+    if not os.path.exists(bak):
+        io.open(bak, "w", encoding="utf-8").write(src)
     src = src.replace(OLD_METHOD, NEW_METHOD, 1)
     io.open(client, "w", encoding="utf-8").write(src)
     print(f"patched ok -> {client}")

@@ -78,7 +78,8 @@ class Parser:
 
     def img(self, path):
         if self.inline:
-            p = os.path.join(self.dir, path)
+            # 前导 / 或 \ 会让 os.path.join 丢弃 src_dir 解析到盘根；按相对路径处理
+            p = os.path.join(self.dir, path.lstrip("/\\"))
             if not os.path.exists(p):
                 return '<div class="img miss"><span>缺图</span><code>%s</code></div>' % esc(path)
             if p not in self.img_cache:

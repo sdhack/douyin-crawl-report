@@ -15,21 +15,34 @@ HEADERS = {
 }
 
 
-def download(url, path):
+def download(url, path, min_bytes=8192):
+    """原子下载：先写 .part 临时文件再 os.replace，中断不会留下残缺文件被
+    断点续跑误判为已完成；小于 min_bytes 视为无效（风控页/错误响应）。"""
     if not url:
         return False, "no-url"
-    if os.path.exists(path) and os.path.getsize(path) > 8192:
+    if os.path.isfile(path) and os.path.getsize(path) > min_bytes:
         return True, "exists"
+    tmp = path + ".part"
     req = urllib.request.Request(url, headers=HEADERS)
     try:
-        with urllib.request.urlopen(req, timeout=60) as r, open(path, "wb") as f:
+        with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
             while True:
                 chunk = r.read(1 << 16)
                 if not chunk:
                     break
                 f.write(chunk)
-        return (os.path.getsize(path) > 8192), f"{os.path.getsize(path)}B"
+        size = os.path.getsize(tmp)
+        if size <= min_bytes:
+            os.remove(tmp)
+            return False, f"too-small {size}B"
+        os.replace(tmp, path)
+        return True, f"{size}B"
     except Exception as e:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
         return False, str(e)[:60]
 
 
@@ -42,7 +55,7 @@ def main():
     a = ap.parse_args()
 
     t = a.threads or probe.download_threads()
-    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 下载线程数={t}")
+    print(f"[资源] {probe.snapshot(probe.has_gpu())} -> 下载线程数={t}", flush=True)
 
     mp = os.path.join(a.root, "video-analysis", a.account, "manifest.json")
     manifest = json.load(open(mp, encoding="utf-8"))
@@ -54,23 +67,22 @@ def main():
     def worker(it):
         aid = it["aweme_id"]
         ok, sub = download(it.get("video_url", ""), os.path.join(vd, f"{aid}.mp4"))
-        try:
-            download(it.get("cover_url", ""), os.path.join(cd, f"{aid}.jpg"))
-        except Exception:
-            pass
-        return {"aweme_id": aid, "video_ok": ok, "note": sub}
+        cok, csub = download(it.get("cover_url", ""), os.path.join(cd, f"{aid}.jpg"), min_bytes=1024)
+        return {"aweme_id": aid, "video_ok": ok, "cover_ok": cok, "note": sub + (" | cover:" + csub if not cok else "")}
 
-    print(f"[下载] 共 {len(manifest)} 条，并发 {t} 线程")
+    print(f"[下载] 共 {len(manifest)} 条，并发 {t} 线程", flush=True)
     results, t0 = [], time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=t) as ex:
         futs = [ex.submit(worker, it) for it in manifest]
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             r = fu.result()
             results.append(r)
-            print(f"  [{i}/{len(manifest)}] {r['aweme_id']}: video_ok={r['video_ok']} {r['note']}")
+            print(f"  [{i}/{len(manifest)}] {r['aweme_id']}: video_ok={r['video_ok']} {r['note']}", flush=True)
     ok = sum(1 for r in results if r["video_ok"])
-    print(f"[完成] 成功 {ok}/{len(manifest)}，耗时 {time.time()-t0:.0f}s")
-    if ok < len(manifest):
+    cok = sum(1 for r in results if r.get("cover_ok"))
+    print(f"[完成] 视频 {ok}/{len(manifest)}，封面 {cok}/{len(manifest)}，耗时 {time.time()-t0:.0f}s", flush=True)
+    if ok < len(manifest) or cok < len(manifest):
+        print("[警告] 存在下载缺失：报告的 TOP 封面/关键帧将如实标注缺图，不会虚构", flush=True)
         sys.exit(1)
 
 

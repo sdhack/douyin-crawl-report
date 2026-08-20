@@ -1,8 +1,8 @@
 {
   "name": "douyin-crawl-report",
-  "version": "0.6.4",
+  "version": "0.6.8",
   "owner": "Gao Ming",
-  "updated_at": "2026-08-19",
+  "updated_at": "2026-08-21",
   "status": "active",
   "maturity_tier": "reusable",
   "lifecycle_stage": "reusable",
