@@ -42,9 +42,10 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 ```
 
 - `--speed` 预设并发：`safe`=1(默认)/`normal`=2/`fast`=3。`--concurrency` 可显式覆盖。
-- `--sleep-min/--sleep-max`：给 MediaCrawler `config/base_config.py` 打一次性 env 补丁（首次备份 `.bak`），使 `MC_SLEEP_SEC` 覆盖其固定 10s；MediaCrawler 内部取 `uniform(0, MC_SLEEP_SEC)`，故该值即本次抓取延时上限，且每批/每次重试重随机。带 `--no-mc-patch` 时不打补丁、延时参数失效（仅并发生效）。
+- `--sleep-min/--sleep-max`：给 MediaCrawler `config/base_config.py` 做一次性 env 注入，采用原子覆盖且不生成备份，使 `MC_SLEEP_MIN/MC_SLEEP_MAX` 覆盖固定延时并逐请求随机；0.7.0 版本门禁失败即停止，不写入不兼容源码。带 `--no-mc-patch` 时不打补丁、延时参数失效（仅并发生效）。
 - `--retry-fail N`：进程非 0 退出/超时自动重试 N 次，指数退避（5s→10s→20s→…封顶 60s）。
-- `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 打 `MC_COMMENTS_COUNT` env 补丁（自动备份 `.bak`）突破，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
+- `--comments-count N`（默认 100）：抖音**出厂单视频评论上限 10 条**，本参数通过给 MediaCrawler `config/base_config.py` 注入 `MC_COMMENTS_COUNT`（原子覆盖、不生成备份）突破；0.7.0 版本门禁失败即停止，按活动/爆款视频可捞满 N 条。`--max` 仍控聚合并入时每视频计数上限。
+- `--no-crawl-optimization`：关闭默认的 creator 请求裁剪。默认优化会对字段已完整的作品跳过 detail 请求，并对 MediaCrawler 作品元数据明确 `comment_count=0` 的作品跳过评论请求；每轮日志与 `run-state.json` 记录 `saved_detail_requests`、`skipped_comment_requests`。
 - 评论模式产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，输出 `comments.py` 下一阶段命令。
 
 产物：`<run-root>/crawl_<account>/` 与运行目录根唯一的 `run.log`、`run-state.json`。父目录维护 `.douyin-crawl-current-<account>.json`，不同 Agent 仅传父目录也会复用当前根；并发创建由账号级锁串行化。只有 `--new-run` 新建下一轮。
@@ -85,12 +86,12 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 |---|---|---|
 | `tools/crawl.py` | `runtime.py run --tool crawl.py --root <parent> [--run-dir <run-root>] --account <slug> --mode creator\|detail\|search --target <目标> ...` | 首次创建一个 `<parent>/<slug>-时间戳/`；评论、重试、续跑复用同一运行根，不再嵌套创建目录 |
 | `tools/patch_mediacrawler.py` | `python tools/patch_mediacrawler.py [<client.py>]` | 给 MediaCrawler 打断点续传补丁（一次性） |
-| `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json` |
-| `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频+封面 |
-| `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 从 JSON 的 `music_download_url` 下载/复用音频后转写，不从 MP4 分离；`needs_visual_review=true` 时结合画面字幕核验 |
-| `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--review-fps 5] [--min-frames 12] [--scene-threshold 0.18]` | 最低覆盖采样、前三秒加密、镜头突变补帧、低置信度视频加密；按 `frames.json` 断点跳过 |
+| `tools/process.py` | `python tools/process.py --root <root> --account <slug> [--json <jsonl>]` | 去重→排序→`manifest.json`，保留作品类型、图集与实际音源 |
+| `tools/download.py` | `python tools/download.py --root <root> --account <slug> [--threads 3]` | 多线程下载视频、图文原图与封面 |
+| `tools/transcribe.py` | `python tools/transcribe.py --root <root> --account <slug> [--model large-v3] [--workers 2] [--device auto] [--compute auto] [--map <term_map.json>]` | 优先使用 `published_audio_url`/兼容旧 `music_download_url`，缓存到 `media-audio/<account>/published/<url_hash>.mp3`；失败回退本地 MP4 再远程视频；beam=1，低置信度自动 beam=5；记录 `source_kind`/URL hash/回退原因 |
+| `tools/extract_frames.py` | `python tools/extract_frames.py --root <root> --account <slug> [--fps 1] [--review-fps 5] [--min-frames 12] [--max-frames 180] [--min-interval 0.20] [--scene-threshold 0.18] [--device auto|cuda|cpu]` | 默认 NVDEC + `scale_cuda` 两阶段候选抽帧；感知/直方图去重、软上限180；GPU 单视频失败 CPU 回退并写入 `frames.json`，图文原图保持统一帧契约 |
 | `tools/analyze_frames.py` | `python tools/analyze_frames.py --root <root> --account <slug>` | 逐帧视觉指标与 OCR，生成 `visual-summary.json`；覆盖画风/色彩/构图/场景候选/字幕/产品露出候选；无 Tesseract 标记 unavailable |
-| `tools/transcribe_bgm.py` | `python tools/transcribe_bgm.py --root <root> --account <slug> [--workers 2] [--device auto] [--compute auto]` | 读取 JSON 的 `music_download_url` 直下并分析（不从 MP4 分离，缺源失败）→ `<root>/bgm/<account>/audio/` 与归档 JSON |
+| `tools/transcribe_bgm.py` | `python tools/transcribe_bgm.py --root <root> --account <slug> [--workers 2] [--device auto] [--compute auto]` | 复用 `media-audio/<account>/published/<url_hash>.mp3`，按 transcript segments 排除口播窗口后做非口播能量/情绪证据分析；默认不做第二次 Whisper，证据不足写 `unknown/证据不足`；归档 JSON 落 `<root>/bgm/<account>/` |
 | `tools/bgm_cross.py` | `python tools/bgm_cross.py --root <root> --account <slug> [--top 10]` | BGM×互动交叉（按 bgm_level/mood/vocal 分组算均赞/均藏/均享 + 爆款明细）→ `<root>/bgm/<account>/_cross.json` |
 | `tools/comments.py` | `python tools/comments.py --root <root> --account <slug> [--max 100]` | 评论聚合（`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N）→ `<root>/video-analysis/<account>/comments.json` |
 | `tools/decompose_prep.py` | `python tools/decompose_prep.py --root <root> --account <slug>` | 组装标题/互动/口播/BGM/评论/关键帧与视觉摘要（画风、色彩、构图、场景、字幕、产品候选）→ `video_profiles.{json,md}` |
@@ -99,7 +100,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `tools/render_report.py` | `python tools/render_report.py --source 总结.md` **或** `... \| python tools/render_report.py --stdin --out 报告.html`（直接出 html、不落 md 中间稿）`[--key 'CREATOR SUMMARY'] [--title …] [--tagline …] [--inline] [--design '<json>'] [--toc]` | **博主全量视频总结 / decompose 长文专用 md→HTML 渲染器**（**三大约束硬性规定**：默认单栏**无目录**（`--no-toc` 即缺省，仅 `--toc` 恢复侧栏）、图片默认「相册网格」两两成排且限高 460px 不突兀、`--design '<json>'` 由 AI 给定整套设计 token 而**骨架全局恒定**；键见 `NEUTRAL_DEFAULT`，漏键回落可读性基线，不做随机轮换；`--inline` 内联 base64）。**不再渲染对标报告**（对标一律走 report_html.py） |
 | `references/blogger-summary-prompt.md` | 账号级总结提示词（见该文件）：对全量 `tags.json`+`comments.json`+`video_profiles` 按 11 节「博主全量视频总结」分析→**直接经 `render_report.py --stdin --key 'CREATOR SUMMARY'` 出 html（不落 md）** | 账号内容增长模型 / 内容DNA / 机会挖掘的多维度总结报告 |
 
-**资源自适应调度（tools/probe.py）**：`download --threads`、`extract_frames --workers`、`transcribe --workers` 缺省按机器配置自动取值——`CPU 核数 + 内存占用率(可用GB) + GPU 有无`。GPU 存在→转写 worker 少（共享显存，宜 2）；无 GPU→CPU 用剩余核并切 int8 且按内存封顶；抽帧按 `min(核,4)` 且受可用内存约束防 OOM。显式传参可覆盖推荐值。
+**资源自适应调度（tools/probe.py）**：`download --threads`、`extract_frames --workers`、`transcribe --workers` 缺省按机器配置自动取值——`CPU 核数 + 内存占用率(可用GB) + GPU 有无`。GPU 存在→转写 worker 少（共享显存，宜 2），NVDEC 抽帧默认 1 worker；无 GPU→ASR 用 CPU/int8、抽帧用 PyAV CPU 并按内存封顶。显式传参可覆盖推荐值。
 
 **tools/ 数据目录约定**：
 
@@ -108,6 +109,7 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 | `<root>/video-analysis/<account>/manifest.json` | 下载清单（含互动指标、URL，按赞排序） |
 | `<root>/video-analysis/<account>/frames/<aweme_id>/*.jpg` | 抽帧（1fps） |
 | `<root>/videos/<account>/*.mp4` | 视频 |
+| `<root>/images/<account>/<aweme_id>/*` | 图文原图 |
 | `<root>/covers/<account>/*.jpg` | 封面 |
 | `<root>/transcript/<account>/*.txt \| *.json` | 口播逐字稿 + 结构化 JSON |
 | `<root>/bgm/<account>/*.json \| _manifest.json` | BGM 归档（bgm_level/vocal/mood/歌词线索）+ 聚合统计 |
@@ -120,4 +122,4 @@ py -3 %SKILL%\tools\runtime.py run --tool crawl.py --root <根> --account <slug>
 
 > **报告渲染分工（v2 收口，防双路径打架）**：**对标分析报告一律走 `tools/report_html.py`**（v2 固定骨架直出自包含单文件，统计数字实时计算、封面/关键帧自动内联、结构自检；定性槽位经 `--narrative` 注入，schema 见 `references/report-template.md`）。`render_report.py` 仅渲染**博主全量视频总结 / decompose 长文**（自由 md，`--inline` 把抽帧/封面内联 base64）。
 
-**tools/ 环境依赖**：`extract_frames` 需 `av`+`Pillow`；`transcribe` 需 `faster-whisper`+`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（解决 `cublas64_12.dll not found`，脚本自动把 bin 加入 PATH）。
+**tools/ 环境依赖**：`extract_frames` 需 `av`+`Pillow`；GPU 优先路径还需带 CUDA/NVDEC 的 FFmpeg，失败会回退 CPU；`transcribe` 需 `faster-whisper`+`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（解决 `cublas64_12.dll not found`，脚本自动把 bin 加入 PATH）。

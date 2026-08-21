@@ -5,6 +5,8 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 # 抖音账号抓取与报告生成
 
+当前文档版本：`0.7.1`。`music_download_url` 表示发布成片混合音轨，不表示独立纯 BGM。
+
 ## 触发场景
 
 - 提供**账号主页 URL**（`douyin.com/user/{sec_uid}`）→ 批量抓取全部视频
@@ -15,8 +17,8 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 
 1. **抓取**（`tools/crawl.py`，技能内建 MediaCrawler 封装）：detail 模式抓单个，creator 模式批量抓账号。creator 的 `--max N` 由技能给 MediaCrawler 注入并验证硬上限，在保存回调前裁剪当前页，达到 N 后停止翻页；补丁不兼容时直接退出，后处理再按主页返回顺序硬截断一次，不能仅信任失效的 `--crawler_max_notes_count`。自动解析 MediaCrawler、断点续传、进度日志并隔离运行目录。**每个 creator 必须使用唯一 `--account` slug**；同一 slug 指向不同账号时直接拒绝。MediaCrawler 失败时不切其他抓取兜底。
    - **评论抓取**：默认开启，每个视频目标抓取 100 条一级评论（`--comments-count 100`）；只有显式传 `--no-comment` 才跳过。评论产物落 `<root>/crawl_<account>/douyin/jsonl/detail_comments_*.jsonl`，再由 `comments.py` 按赞聚合且每视频最多保留 100 条。评论 API 需登录态；登录态不可用或无法保证 100 条配置时直接失败，不静默降级。**注意**：批处理循环用 Python `subprocess` 驱动，勿用 `powershell -File` 拼中文路径。
-2. **数据处理**：`process.py` 去重→manifest → `download.py` 下载视频/封面 → 图文切分。
-3. **内容分析**：优先用 `analyze.py` 一键执行“音频转写 → 自适应抽帧与 BGM 并行 → 逐帧视觉分析”。每视频最低 12 个均匀采样点，前三秒 3 FPS，镜头突变补帧，低置信度视频 5 FPS；输出 `frames.json`、单视频 `visual-summary.json` 和账号 `_visual-summary.json`，覆盖画风、色彩、构图、场景候选、字幕样式与产品露出候选。场景和产品候选必须保留置信度/待复核状态，禁止当成确定识别结果。
+2. **数据处理**：`process.py` 去重→manifest → `download.py` 下载视频/封面；图文作品下载原图并进入统一帧分析契约。
+3. **内容分析**：优先用 `analyze.py` 一键执行“音频转写 → 自适应抽帧与 BGM 并行 → 逐帧视觉分析”。口播优先复用 manifest 的 `published_audio_url`（发布成片混合音轨）转写，下载或解码失败才回退本地 MP4，最后回退远程视频；BGM 复用同一 published 缓存，并按 transcript segments 排除口播窗口。每视频最低 12 个均匀采样点，前三秒 3 FPS，镜头突变补帧，只有有置信区间的低置信片段局部加密；抽帧默认 NVDEC + `scale_cuda` 两阶段、最多 180 帧，GPU 单视频失败自动 CPU 回退。输出 `frames.json`、单视频 `visual-summary.json` 和账号 `_visual-summary.json`，覆盖画风、色彩、构图、场景候选、字幕样式与产品露出候选；视觉摘要进一步进入 `report_html.py` 内容矩阵与爆款对比。场景和产品候选必须保留置信度/待复核状态，禁止当成确定识别结果。
 4. **报告生成（v2 固定骨架，数据与叙事分离）**：对标报告用技能内建 **`tools/report_html.py`** 直出固定骨架 HTML——10 区骨架、统计、多枚 SVG 图表（周发布分布/月度趋势/主题环形/点赞分布/BGM 对比/情绪分布）与封面/关键帧自动内联固化在工具里，**全部统计数字由工具从管线产物实时计算**（manifest/comments/_cross/frames/covers），AI 只按 `references/report-template.md` 的槽位 schema 撰写 `narrative.json`（定性结论/口号/金句/方案），**不手写统计数字**；缺源章节自动省略并写入附言缺源声明，禁止虚构。**设计美学完全由 AI 决定**——AI 在 narrative 的 `design` 键（或 CLI `--design`）给出整套配色/圆角/阴影/字体 token，缺键回落到高可读性基线，每次报告主动换一套避免雷同。`render_report.py` **仅用于博主全量视频总结 / decompose 长文**（自由 md + **骨架恒定、设计美学完全由 AI 决定**，`--design '<json>'` 传视觉 token），**不再渲染对标报告**（双路径已收口，防打架）。若用户要求视频级逆向拆解 / 账号级深度总结，按 `references/decompose-methodology.md` 补齐数据链（全量每条第11节标签 → `decompose/tags.json` → 爆款TOP+典型11节深拆），**并先跑 `tools/account_metrics.py` 自动聚合账号级维度（发布节奏 / 互动交叉聚类 / 话题策略+高赞评论 → `decompose/<account>/_metrics.json`，为博主总结必吃数据）**，再按 `references/blogger-summary-prompt.md` 的**博主全量视频总结提示词**对全部视频做账号级总结（定位/选题地图/Hook/内容结构/画面/用户需求/爆款对比/DNA/机会/最终输出），产出 Markdown 后经 `tools/render_report.py` 渲染为 HTML。
 > **参考骨架权威结构（用户在要求"H1/H2/H3 严格按参考 HTML 生成"时必须遵守）**：参考文件 `https://share.traecontent.cn/artifact/69IZX28CO_67JP` 的章节骨架为 **01~07 七章**——01 如何把达人列为对标账号 / 02 达人画像总览 / 03 内容矩阵拆解 / 04 文案写作逻辑深度拆解 / 05 带货与变现逻辑 / **06 直播逻辑** / 07 差异化起号方案，外层再套 数据样本构成五源卡 → 关键指标 4 大数字 → 核心结论。**注意 `report_html.py` 默认章节是 01~08（含独立「评论区实证」「BGM×互动」两章、**无 06 直播**），与参考骨架不一致**；当用户要求严格按照参考 HTML 的结构时，用 `render_report.py` + 手工复刻 `_benchmark_src.md`（照 report-template.md 的 01~07 骨架），勿用 report_html.py。
 
@@ -29,13 +31,13 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 ### 提速（Speed）
 - **抓取**：抓取异常/漏抓时**优先修 MediaCrawler 自身**（签名参数、分页参数、登录态），核验真实视频数，**不切浏览器兜底**（历史上曾用浏览器内 fetch 直连 API 临时救急，已弃用——其与 MediaCrawler 抓取栈脱节，易再踩坑且违背"修根因"原则）。
 - **管线断点续传**：下载/抽帧/转写均按产出自动跳过已完成项，换新数据只处理增量（实测 162 条中仅重跑新增 105 条）。
-- **BGM 音源直用抓取 JSON**：`transcribe_bgm.py` 从 `video-analysis/<account>/manifest.json` 的 `music_url`（抓取字段 `music_download_url`）下载到本次运行的 `bgm/<account>/audio/` 后分析，**不再从 MP4 分离音频**；缺失或下载/解码失败直接报错退出，不回退。
-- **转写同模型复用**：口播与 BGM 统一用 faster-whisper **large-v3**，BGM 复用口播已缓存的同一模型，**免二次联网下载**。GPU 默认 float16，不支持的卡自动降级 `int8_float32`（实测 RTF 0.27–0.30，仍远快于 CPU int8 的 1.61，约 5.6×）。
-- **音频直连转写**：口播转写直接读取抓取 JSON 的 `music_download_url` 并复用本地音频缓存，不从 MP4 分离；缺源直接失败。低置信度结果标记 `needs_visual_review`，再结合抽帧字幕核验，不把画面核验伪装成转写成功。
-- **运行日志与续跑**：每次抓取在本次运行目录根生成追加式 `run.log` 和原子更新的 `run-state.json`，运行中每 60 秒写进度心跳；显式复用 `--run-dir` 时校验账号身份并从 MediaCrawler cursor 与各阶段完成标记续跑。
+- **发布音频统一复用**：manifest 的 `published_audio_url`（兼容旧 `music_download_url`/`music_url`/`audio_url`）是发布成片混合音轨。`cached_published()` 按 URL hash 原子缓存到 `media-audio/<account>/published/<url_hash>.mp3`，口播 ASR 优先使用它；下载或解码失败才回退本地 MP4 提取，再回退远程视频。BGM 复用同一文件，不把它称为独立纯 BGM。
+- **转写自适应精度**：口播统一使用 faster-whisper **large-v3**，首轮 `beam_size=1`，语言/平均 logprob/空段低置信时同一音频用 `beam_size=5` 重跑；GPU 默认 float16，不支持时按代码降级，缓存校验包含音频哈希、配置、实际设备和计算类型。
+- **BGM 只做混合音轨证据分析**：`transcribe_bgm.py` 复用发布成片混合音轨，按口播 transcript segments 排除语音窗口后计算非口播区间的能量/情绪证据；默认不做第二次 Whisper。非口播证据不足时输出 `unknown/证据不足`，不得写成纯 BGM 或歌词结论。
+- **运行日志与续跑**：每次抓取在本次运行目录根生成追加式 `run.log` 和原子更新的 `run-state.json`，`RunProgress` 持续记录阶段状态、`duration_sec` 与抓取优化吞吐（如 saved detail requests、skipped comment requests）；显式复用 `--run-dir` 时校验账号身份并从 MediaCrawler cursor 与各阶段完成标记续跑。
 - **运行根唯一**：首次抓取在父目录创建一个时间戳运行根并写 `.douyin-crawl-run.json`；后续评论、重试或补抓必须复用该根。即使 Agent 误把已有运行根再次传给 `--root`，工具也会识别并复用，禁止在运行根内再生成 `<account>-时间戳/`。
 - **跨 Agent 当前指针**：父目录保存 `.douyin-crawl-current-<account>.json`，且创建运行根时使用账号级目录锁。其他 Agent 即使只传父目录，也会复用指针指向的运行根；旧任务无指针时只扫描父目录一级并选最近有效根，绝不选嵌套目录。只有用户明确开始新一轮时传 `--new-run`；不得习惯性新建。
-- **阶段并行**：下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU。
+- **阶段并行**：下载（网络 I/O）与抽帧可并行；抽帧默认 GPU 单 worker，BGM 不加载 Whisper，兼容参数 `--music-asr` 会被忽略，因此可与 GPU 抽帧并行且不争抢显存。
 
 ### 提质（Quality）
 - **核实真实视频数**：抓取完成后必须与主页显示的视频数核对，防止签名失效导致的静默漏抓（曾只抓到 57/162 条）。
@@ -54,7 +56,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 ## 关键约束
 
 - 单会话 ~230 条 API 限制，批量需断点续传分多次跑
-- 请求间隔 8–10s，防 ArgusSecurityPlugin 拦截
+- 请求间隔由抓取参数控制，默认安全节奏；`--sleep-min/--sleep-max` 启用后每次请求独立随机取样，防 ArgusSecurityPlugin 拦截
 - 视觉分析必须真实，不得用推断冒充
 - 直播话术需人工校对口音误识别（产品名/工艺/专业术语）
 - 报告图片用真实抽帧，不用 AI 生成图
@@ -74,7 +76,7 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
   - `py -3 <skill>/tools/runtime.py run --tool <name>.py --root <工作根> --account <slug> [args]`（用运行库解释器跑工具）
   - 解析优先级：`DOUYIN_RUNTIME_PY` 环境变量 > 全局指针 > 项目 `.runtime/py`（仅此三档，技能旧 `.venv` 已弃用不参与解析）。
 - **抓取引擎** MediaCrawler venv 同样在全局指针登记（`keys.mediacrawler`）；其源码暂存于 `~/.cache/codex-mediacrawler/`。
-- **产物一律落项目目录**：视频→`videos/`、抽帧→`video-analysis/<账号>/frames`、转写→`transcript/`、模型缓存→项目 `models_cache/`（`HF_ENDPOINT`/`HF_HUB_DISABLE_XET=1` 已配置）。
+- **产物一律落项目目录**：视频→`videos/`、抽帧→`video-analysis/<账号>/frames`、发布混合音轨→`media-audio/<账号>/published/`、转写→`transcript/`、模型缓存→项目 `models_cache/`（`HF_ENDPOINT`/`HF_HUB_DISABLE_XET=1` 已配置）。
 
 ## 内建一键流水线（tools/）
 
@@ -86,10 +88,10 @@ description: 从抖音账号/视频 URL 抓取视频数据（单个+批量），
 | 阶段 | 产物 | 路径 |
 |---|---|---|
 | 抓取 | JSONL（原始 + 过滤去重）+ 日志 | `crawl_<account>/`、`crawl_<account>/<account>_dedup.jsonl` |
-| 处理 | 下载清单（互动排序） | `video-analysis/<account>/manifest.json` |
-| 下载 | 视频 / 封面 | `videos/<account>/`、`covers/<account>/` |
-| 分析 | 抽帧 + 口播转写 | `video-analysis/<account>/frames/<aweme_id>/`、`transcript/<account>/` |
-| BGM | 归档 + 交叉统计 | `bgm/<account>/`（`_manifest.json`）、`bgm/<account>/_cross.json` |
+| 处理 | 下载清单（互动排序，含作品类型/音源） | `video-analysis/<account>/manifest.json` |
+| 下载 | 视频 / 图文原图 / 封面 | `videos/<account>/`、`images/<account>/`、`covers/<account>/` |
+| 分析 | 抽帧 + 口播转写 | `video-analysis/<account>/frames/<aweme_id>/`、`transcript/<account>/`、`media-audio/<account>/published/` |
+| BGM | 混合音轨非口播证据归档 + 交叉统计 | `media-audio/<account>/published/`、`bgm/<account>/`、`bgm/<account>/_cross.json` |
 | 报告 | 对标 HTML（v2 固定骨架，自包含单文件） | `{账号}-对标分析报告.html`（report_html.py）+ `video-analysis/<account>/narrative.json` |
 | 报告 | 参考骨架版对标 HTML（01~07 含 06 直播，严格按参考 HTML） | `{账号}-对标分析报告（参考骨架）.html`（render_report.py + 手工 `_benchmark_src.md`） |
 | 报告 | 博主总结 HTML（自由 md 渲染） | `{账号}-博主全量视频总结.html`（render_report.py） |

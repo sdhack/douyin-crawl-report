@@ -1,25 +1,27 @@
 # -*- coding: utf-8 -*-
-"""口播转写：直接下载并使用抓取 JSON 中的 music_download_url。
-- CPU/GPU 自动择优：有 CUDA 用 cuda/float16（约快 10x），否则 cpu/int8。
-- 全部产物已存在时跳过模型加载（省冷启动约 5s）。
-- 可选术语纠错映射 --map <json>：{误词: 正词}，转写后自动订正专业名词误识（提质）。
-用法: python tools/transcribe.py --root <工作根> --account <slug>
-      [--model large-v3] [--device auto] [--compute auto] [--workers N] [--map <term_map.json>]
-依赖: pip 安装 faster-whisper, ctranslate2; GPU 需 nvidia-cublas-cu12（脚本自动定位并加入 PATH）
-输入：`video-analysis/<account>/manifest.json` 的 music_url，缓存至 `bgm/<account>/audio/`。
-不从 MP4 分离音频；低置信度结果标记 needs_visual_review，供后续结合画面字幕核验。
-输出: <root>/transcript/<account>/{aweme_id}.txt | .json
+"""口播转写：从本地视频最终混合音轨提取 speech 音频后转写。
+
+首轮使用 beam=1；只有低语言置信度、低平均 log probability 或空结果才
+使用 beam=5 精转。产物带 cache_version/config_hash/audio_sha256 及实际
+device/compute/runner，避免旧音源、旧参数或 GPU 回退缓存被误当成当前结果。
 """
-import argparse, os, sys, time, glob, json
+import argparse
 import concurrent.futures
+import hashlib
+import json
+import os
+import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import probe  # noqa: E402
-from audio_source import cached_audio, manifest_items  # noqa: E402
+from audio_source import cached_speech, file_sha256, speech_items  # noqa: E402
+
+CACHE_VERSION = "speech-transcript-v3"
+CACHE_SCHEMA = "speech-cache-v3"
 
 
 def find_cublas():
-    """ctranslate2(自制 CUDA12) 需要 cublas64_12.dll；定位 pip 装目录并提前 PATH。"""
     import glob as g
     for base in list(sys.path):
         for p in g.glob(os.path.join(base, "nvidia", "cublas*", "bin")):
@@ -41,7 +43,6 @@ def load_terms(path):
 
 
 def correct(text, terms):
-    """按术语映射订正误识；terms 为 None 时原样返回。"""
     if not terms or not text:
         return text
     for k, v in terms.items():
@@ -49,80 +50,132 @@ def correct(text, terms):
     return text
 
 
+def _config_hash(model, device, compute, terms):
+    payload = {"model": model, "device": device, "compute": compute,
+               "terms": terms or {}, "version": CACHE_VERSION}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()[:24]
+
+
+def _atomic_json(path, data):
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
+def _avg_logprob(probs):
+    vals = [float(x) for x in probs if x is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _valid_cached_transcript(data, root, cfg_hash, requested_device, requested_compute):
+    """Validate without loading the model; device must match, compute may be a recorded runtime fallback."""
+    if not isinstance(data, dict):
+        return False
+    if (data.get("cache_version") != CACHE_VERSION or
+            data.get("cache_schema") != CACHE_SCHEMA or
+            data.get("config_hash") != cfg_hash or
+            data.get("requested_device") != requested_device or
+            data.get("requested_compute") != requested_compute or
+            data.get("actual_device") != requested_device or
+            not data.get("actual_compute") or
+            not data.get("runner") or
+            "source_kind" not in data or
+            "source_url_hash" not in data or
+            "fallback_reason" not in data):
+        return False
+    audio_path = os.path.join(root, str(data.get("audio_path") or ""))
+    try:
+        if not os.path.isfile(audio_path) or os.path.getsize(audio_path) <= 0:
+            return False
+        expected_hash = str(data.get("audio_sha256") or "")
+        return bool(expected_hash) and file_sha256(audio_path) == expected_hash
+    except (OSError, ValueError):
+        return False
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True)
-    ap.add_argument("--account", required=True, help="账号 slug，如 myaccount")
+    ap.add_argument("--account", required=True)
     ap.add_argument("--model", default="large-v3")
     ap.add_argument("--device", default="auto", help="auto/cuda/cpu")
     ap.add_argument("--compute", default="auto", help="auto/float16/int8/float32")
-    ap.add_argument("--workers", type=int, default=None,
-                    help="转写 worker 数（缺省按机器配置自动调度，GPU 宜少）")
+    ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--map", default=None, help="术语纠错映射 json：{误词: 正词}")
     a = ap.parse_args()
 
     find_cublas()
-    import ctranslate2
+    try:
+        import ctranslate2
+        has_cuda = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        ctranslate2 = None
+        has_cuda = False
 
-    audio_dir = os.path.join(a.root, "bgm", a.account, "audio")
     od = os.path.join(a.root, "transcript", a.account)
     os.makedirs(od, exist_ok=True)
-    os.makedirs(audio_dir, exist_ok=True)
     try:
-        inputs = manifest_items(a.root, a.account)
+        inputs = speech_items(a.root, a.account)
     except Exception as e:
         sys.exit(f"[ERR] {e}")
-
-    def prod_exists(aid):
-        return os.path.exists(os.path.join(od, aid + ".txt")) and os.path.exists(os.path.join(od, aid + ".json"))
-
     terms = load_terms(a.map)
+    requested_device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
+    requested_compute = "float16" if (a.compute == "auto" and requested_device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
+    cfg_hash = _config_hash(a.model, requested_device, requested_compute, terms)
 
-    def rewrite_corrected(tp, jp, terms):
-        """对已产成 .txt/.json 的文本层做术语订正；有改动返回 True。"""
+    def prod_valid(aid):
+        jp = os.path.join(od, aid + ".json")
+        tp = os.path.join(od, aid + ".txt")
+        if not (os.path.exists(jp) and os.path.exists(tp)):
+            return False
         try:
-            with open(tp, encoding="utf-8") as f:
-                txt = f.read()
-            if not any(k in txt for k in terms):
-                return False
-            with open(tp, "w", encoding="utf-8") as f:
-                f.write(correct(txt, terms))
             data = json.load(open(jp, encoding="utf-8"))
-            for seg in data.get("segments", []):
-                seg["text"] = correct(seg.get("text", ""), terms)
-            json.dump(data, open(jp, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-            return True
+            return _valid_cached_transcript(data, a.root, cfg_hash,
+                                            requested_device, requested_compute)
         except Exception:
             return False
 
-    def prod_missing(item):
-        return not prod_exists(item[0])
+    def rewrite_existing(aid):
+        if not terms:
+            return False
+        tp = os.path.join(od, aid + ".txt")
+        jp = os.path.join(od, aid + ".json")
+        try:
+            with open(tp, encoding="utf-8") as f:
+                txt = f.read()
+            new_txt = correct(txt, terms)
+            if new_txt != txt:
+                with open(tp, "w", encoding="utf-8") as f:
+                    f.write(new_txt)
+            data = json.load(open(jp, encoding="utf-8"))
+            for seg in data.get("segments", []):
+                seg["text"] = correct(seg.get("text", ""), terms)
+            _atomic_json(jp, data)
+            return new_txt != txt
+        except Exception:
+            return False
 
-    has_cuda = ctranslate2.get_cuda_device_count() > 0
-
-    # 快检：全部已产成 → 不解码模型；有 --map 仅对已有产物就地订正文本层
-    if all(not prod_missing(m) for m in inputs):
-        if terms:
-            n_fix = sum(rewrite_corrected(os.path.join(od, m[0] + ".txt"),
-                                          os.path.join(od, m[0] + ".json"),
-                                          terms) for m in inputs)
-            print(f"[skip-all] {len(inputs)} 个视频均已产成，按 --map 订正 {n_fix} 个 | {probe.snapshot(has_cuda)}", flush=True)
-        else:
-            print(f"[skip-all] {len(inputs)} 个视频均已产成，跳过模型加载与转写 | {probe.snapshot(has_cuda)}", flush=True)
+    if all(prod_valid(item[0]) for item in inputs):
+        fixed = sum(rewrite_existing(item[0]) for item in inputs)
+        print(f"[skip-all] {len(inputs)} 个口播产物均为 {CACHE_VERSION}，订正 {fixed} 个 | {probe.snapshot(has_cuda)}", flush=True)
         return
 
-    pending = [m for m in inputs if prod_missing(m)]
-    device = "cuda" if (a.device == "auto" and has_cuda) else ("cpu" if a.device == "auto" else a.device)
-    compute = "float16" if (a.compute == "auto" and device == "cuda") else ("int8" if a.compute == "auto" else a.compute)
+    pending = [item for item in inputs if not prod_valid(item[0])]
     print(f"[env] cuda_count={has_cuda}", flush=True)
-    w = a.workers or probe.transcribe_workers(has_cuda)
-    print(f"[资源] {probe.snapshot(has_cuda)} -> device={device}/{compute}，转写worker数={w}", flush=True)
+    workers = a.workers or probe.transcribe_workers(has_cuda)
+    print(f"[资源] {probe.snapshot(has_cuda)} -> device={requested_device}/{requested_compute}，转写worker数={workers}", flush=True)
 
     from faster_whisper import WhisperModel
 
     def load_model(path, dev, comp):
-        """技能承诺的自动降级：float16 不被卡/CUDA 后端支持时按
-        int8_float32 -> CPU int8 逐级回退（此前从未实现，实测直接 ValueError 崩溃）"""
         try:
             return WhisperModel(path, device=dev, compute_type=comp), dev, comp
         except (ValueError, RuntimeError, OSError) as e:
@@ -137,48 +190,93 @@ def main():
                 return WhisperModel(path, device="cpu", compute_type="int8"), "cpu", "int8"
             raise
 
-    model, device, compute = load_model(a.model, device, compute)
+    model, device, compute = load_model(a.model, requested_device, requested_compute)
     print(f"[model] 实际生效 device={device}/{compute}", flush=True)
     if terms:
         print(f"[map] 术语纠错映射已启用：{len(terms)} 项", flush=True)
 
+    # BatchedInferencePipeline is optional across faster-whisper versions.
+    # Use it when available, but always fall back to the model API.
+    runner = model.transcribe
+    runner_name = "WhisperModel"
+    try:
+        from faster_whisper import BatchedInferencePipeline
+        batched = BatchedInferencePipeline(model=model)
+        runner = lambda path, **kwargs: batched.transcribe(path, batch_size=max(1, workers), **kwargs)
+        runner_name = "BatchedInferencePipeline"
+    except Exception as e:
+        print(f"[warn] BatchedInferencePipeline 不可用，回退 WhisperModel: {str(e)[:80]}", flush=True)
+    print(f"[runner] {runner_name}", flush=True)
+
+    def transcribe_once(audio_path, beam):
+        kwargs = dict(language="zh", beam_size=beam, vad_filter=True,
+                      initial_prompt="以下是一段抖音口播视频的普通话转写，请准确识别产品专业名词、数字与品牌名。")
+        try:
+            segs, info = runner(audio_path, **kwargs)
+            return list(segs), info
+        except Exception:
+            # Some batched versions reject an option; retry through the stable API.
+            fallback_segs, fallback_info = model.transcribe(audio_path, **kwargs)
+            return list(fallback_segs), fallback_info
+
     def one(item):
-        aid, url = item
+        aid, url, policy, published_url, published_key_value = (item + ("", ""))[:5]
         tp = os.path.join(od, aid + ".txt")
         jp = os.path.join(od, aid + ".json")
         t0 = time.time()
         try:
-            audio_path = cached_audio(a.root, a.account, aid, url)
-            segs, info = model.transcribe(
-                audio_path, language="zh", beam_size=5, vad_filter=True,
-                initial_prompt="以下是一段抖音口播视频的普通话转写，请准确识别产品专业名词、数字与品牌名。",
-            )
-            lines, sl, probs = [], [], []
+            audio_path, source_kind, source_url_hash, fallback_reason, migrated_from = cached_speech(
+                a.root, a.account, aid, url, published_url, published_key_value, return_meta=True)
+            audio_hash = file_sha256(audio_path)
+            segs, info = transcribe_once(audio_path, 1)
+            probs = [getattr(s, "avg_logprob", None) for s in segs]
+            avg = _avg_logprob(probs)
+            lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+            needs_refine = not segs or lang_prob < 0.80 or (avg is not None and avg < -0.80)
+            refined = False
+            if needs_refine:
+                segs, info = transcribe_once(audio_path, 5)
+                probs = [getattr(s, "avg_logprob", None) for s in segs]
+                avg = _avg_logprob(probs)
+                lang_prob = float(getattr(info, "language_probability", 0.0) or 0.0)
+                refined = True
+            lines, serialized = [], []
             for s in segs:
-                t = correct(s.text.strip(), terms)
-                lines.append(f"[{s.start:06.2f} - {s.end:06.2f}] {t}")
-                sl.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": t})
-                probs.append(float(s.avg_logprob))
-            with open(tp, "w", encoding="utf-8") as f:
+                text = correct(s.text.strip(), terms)
+                lines.append(f"[{s.start:06.2f} - {s.end:06.2f}] {text}")
+                serialized.append({"start": round(s.start, 2), "end": round(s.end, 2), "text": text})
+            with open(tp + ".tmp", "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))
-            with open(jp, "w", encoding="utf-8") as f:
-                json.dump({
-                    "aweme_id": aid, "language": info.language,
-                    "language_probability": round(float(info.language_probability), 3),
-                    "duration": round(float(info.duration), 2), "segments": sl,
-                    "source": "music_download_url",
-                    "audio_path": os.path.relpath(audio_path, a.root).replace(os.sep, "/"),
-                    "avg_logprob": round(sum(probs) / len(probs), 3) if probs else None,
-                    "needs_visual_review": bool(float(info.language_probability) < 0.80 or not sl or
-                                                (probs and sum(probs) / len(probs) < -0.8)),
-                }, f, ensure_ascii=False, indent=2)
-            return aid, f"ok {len(sl)}segs {time.time()-t0:.1f}s"
+            os.replace(tp + ".tmp", tp)
+            data = {
+                "cache_version": CACHE_VERSION, "cache_schema": CACHE_SCHEMA, "config_hash": cfg_hash,
+                "audio_sha256": audio_hash, "aweme_id": aid,
+                "requested_device": requested_device, "requested_compute": requested_compute,
+                "actual_device": device, "actual_compute": compute, "runner": runner_name,
+                "language": getattr(info, "language", "zh"),
+                "language_probability": round(lang_prob, 3),
+                "duration": round(float(getattr(info, "duration", 0.0) or 0.0), 2),
+                "segments": serialized, "source": source_kind,
+                "source_kind": source_kind, "source_url_hash": source_url_hash,
+                "fallback_reason": fallback_reason, "migrated_from": migrated_from,
+                "published_audio_url": published_url,
+                "speech_source": source_kind,
+                "speech_policy": policy,
+                "audio_path": os.path.relpath(audio_path, a.root).replace(os.sep, "/"),
+                "avg_logprob": round(avg, 3) if avg is not None else None,
+                "decode_beam": 5 if refined else 1,
+                "needs_visual_review": bool(lang_prob < 0.80 or not serialized or (avg is not None and avg < -0.8)),
+            }
+            _atomic_json(jp, data)
+            return aid, f"ok {len(serialized)}segs source={source_kind} beam={data['decode_beam']} {time.time()-t0:.1f}s"
         except Exception as e:
-            return aid, f"ERR {str(e)[:80]}"
+            if os.path.exists(tp + ".tmp"):
+                os.remove(tp + ".tmp")
+            return aid, f"ERR {str(e)[:100]}"
 
-    print(f"[start] {len(pending)} videos -> {od} ({device}, {w} workers)", flush=True)
+    print(f"[start] {len(pending)} videos -> {od} ({device}, {workers} workers)", flush=True)
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=w) as ex:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(one, item): item for item in pending}
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             aid, note = fu.result()

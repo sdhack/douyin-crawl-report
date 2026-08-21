@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""多线程下载视频+封面。并发默认 3 线程（规避抖音 CDN 风控）。
+"""多线程下载视频、图文原图和封面。并发按机器配置自适应。
 用法: python tools/download.py --root <工作根> --account <slug> [--threads N]
 输入: <root>/video-analysis/<account>/manifest.json
-输出: <root>/videos/<account>/*.mp4, <root>/covers/<account>/*.jpg
+输出: videos/<account>/*.mp4, images/<account>/<aweme_id>/*.jpg, covers/<account>/*.jpg
 """
 import argparse, json, os, sys, urllib.request, concurrent.futures, time
 
@@ -61,14 +61,29 @@ def main():
     manifest = json.load(open(mp, encoding="utf-8"))
     vd = os.path.join(a.root, "videos", a.account)
     cd = os.path.join(a.root, "covers", a.account)
+    nd = os.path.join(a.root, "images", a.account)
     os.makedirs(vd, exist_ok=True)
     os.makedirs(cd, exist_ok=True)
+    os.makedirs(nd, exist_ok=True)
 
     def worker(it):
         aid = it["aweme_id"]
-        ok, sub = download(it.get("video_url", ""), os.path.join(vd, f"{aid}.mp4"))
+        is_note = int(it.get("aweme_type") or 0) == 68
+        if is_note:
+            urls = [u for u in it.get("note_urls", []) if u]
+            note_dir = os.path.join(nd, str(aid))
+            os.makedirs(note_dir, exist_ok=True)
+            notes = [download(url, os.path.join(note_dir, f"{i:03d}.jpg"), min_bytes=1024)
+                     for i, url in enumerate(urls, 1)]
+            ok = bool(notes) and all(x[0] for x in notes)
+            sub = f"images={sum(x[0] for x in notes)}/{len(urls)}"
+            kind = "note"
+        else:
+            ok, sub = download(it.get("video_url", ""), os.path.join(vd, f"{aid}.mp4"))
+            kind = "video"
         cok, csub = download(it.get("cover_url", ""), os.path.join(cd, f"{aid}.jpg"), min_bytes=1024)
-        return {"aweme_id": aid, "video_ok": ok, "cover_ok": cok, "note": sub + (" | cover:" + csub if not cok else "")}
+        return {"aweme_id": aid, "kind": kind, "content_ok": ok, "cover_ok": cok,
+                "note": sub + (" | cover:" + csub if not cok else "")}
 
     print(f"[下载] 共 {len(manifest)} 条，并发 {t} 线程", flush=True)
     results, t0 = [], time.time()
@@ -77,10 +92,14 @@ def main():
         for i, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             r = fu.result()
             results.append(r)
-            print(f"  [{i}/{len(manifest)}] {r['aweme_id']}: video_ok={r['video_ok']} {r['note']}", flush=True)
-    ok = sum(1 for r in results if r["video_ok"])
+            print(f"  [{i}/{len(manifest)}] {r['aweme_id']}: {r['kind']}_ok={r['content_ok']} {r['note']}", flush=True)
+    ok = sum(1 for r in results if r["content_ok"])
+    vok = sum(1 for r in results if r["kind"] == "video" and r["content_ok"])
+    nok = sum(1 for r in results if r["kind"] == "note" and r["content_ok"])
     cok = sum(1 for r in results if r.get("cover_ok"))
-    print(f"[完成] 视频 {ok}/{len(manifest)}，封面 {cok}/{len(manifest)}，耗时 {time.time()-t0:.0f}s", flush=True)
+    nv = sum(1 for r in results if r["kind"] == "video")
+    nn = len(results) - nv
+    print(f"[完成] 视频 {vok}/{nv}，图文 {nok}/{nn}，封面 {cok}/{len(manifest)}，耗时 {time.time()-t0:.0f}s", flush=True)
     if ok < len(manifest) or cok < len(manifest):
         print("[警告] 存在下载缺失：报告的 TOP 封面/关键帧将如实标注缺图，不会虚构", flush=True)
         sys.exit(1)

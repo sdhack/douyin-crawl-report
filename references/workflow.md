@@ -37,6 +37,7 @@
 - 所有抓取默认开启评论，每个视频目标 100 条一级评论；`--comments-count` 可覆盖，只有显式 `--no-comment` 才跳过。评论落 `detail_comments_*.jsonl`。
 - **提速参数**（更快与不被封兼得）：`--speed normal|fast`（并发 2/3）、`--sleep-min 3 --sleep-max 8`（随机延时覆盖 MediaCrawler 固定 10s）、`--retry-fail 2`（指数退避重试）、`--comments-count 100`（突破出厂单视频 10 条评论上限）。
 - 评论 API 需登录态；追账期内可直接复用登录态，无需重复扫码。
+- creator 默认启用请求裁剪：主页作品字段完整时跳过 detail，MediaCrawler 作品元数据明确 `comment_count=0` 时跳过评论请求；可用 `--no-crawl-optimization` 关闭。`run-state.json` 的 `metrics` 记录 `saved_detail_requests` 与 `skipped_comment_requests`，以实际日志计数为准。
 - **注意**：批处理循环用 python 脚本（`subprocess`）驱动，勿用 `powershell -File` 拼中文路径（代码页会乱码导致整脚本早退）。
 - 产物判定看 `detail_comments_*.jsonl`（不对评论做账号关键词过滤），成功即 `exit 0`，自动提示下一步 `comments.py` 命令。
 
@@ -48,18 +49,18 @@
 ## 阶段 2：数据处理（process.py → download.py）
 
 1. `process.py`：对去重 jsonl 按 aweme_id 去重 → 互动指标换算 → 按赞排序 → 生成下载清单 `video-analysis/<account>/manifest.json`
-2. `download.py`：多线程下载视频 + 封面 → `videos/<account>/`、`covers/<account>/`（并发默认按机器配置 2~6，规避 CDN 风控；按产物存在性跳过，断点续传）
+2. `download.py`：多线程下载视频、图文原图与封面 → `videos/<account>/`、`images/<account>/`、`covers/<account>/`（并发默认按机器配置 2~6，规避 CDN 风控；按产物存在性跳过，断点续传）
 
 ## 阶段 3：内容分析
 
 1. `analyze.py`：统一编排音频转写、自适应抽帧、BGM 与逐帧 OCR，并把阶段状态写入运行日志。
-2. `transcribe.py`：直接读取抓取 JSON 的 `music_download_url`，下载/复用音频后生成逐字稿；低置信度写入 `needs_visual_review=true`。
-3. `extract_frames.py` + `analyze_frames.py`：每视频最低 12 个覆盖点，前三秒 3 FPS、镜头突变补帧、低置信度 5 FPS；输出每帧时间戳、画风、HSV 色彩/色温/对比度、视觉重心/构图、场景候选、OCR 字幕区域/覆盖率和产品露出候选，并聚合 `visual-summary.json`。场景与产品只输出启发式候选，必须复核；Tesseract 不存在时明确写 `ocr_status=unavailable`。
-4. `transcribe_bgm.py`：直接读取抓取 JSON 的音乐 URL并归档；不从 MP4 分离音频，缺源非零退出。
+2. `transcribe.py`：优先读取 manifest 的 `published_audio_url`（兼容 `music_download_url`/`music_url`/`audio_url`），按 URL hash 原子缓存发布成片混合音轨到 `media-audio/<account>/published/<url_hash>.mp3`；下载或解码失败才用本地 MP4 提取，最后回退远程视频。首轮 `beam_size=1`，语言/平均 logprob/空段低置信时用 `beam_size=5` 重跑，生成逐字稿并保存 `source_kind`/`source_url_hash`/`fallback_reason`/音频哈希/设备；图文跳过，低置信度写入 `needs_visual_review=true`。
+3. `extract_frames.py` + `analyze_frames.py`：视频每条最低 12 个覆盖点，前三秒 3 FPS、镜头突变补帧；NVDEC + `scale_cuda` 先低分辨率代理检测，再只提取候选高清帧，默认每视频软上限 180 帧，感知/直方图去重和最短间隔控制膨胀。低置信度只对有置信区间的 segment 局部加密，旧 JSON 只有全局标记时不整条 5 FPS；GPU 单视频失败自动 PyAV CPU 回退，并在 `frames.json` 写 `backend`/`fallback_reason`。图文原图导入相同 `frames.json` 契约。输出每帧时间戳、画风、HSV 色彩/色温/对比度、视觉重心/构图、场景候选、OCR 字幕区域/覆盖率和产品露出候选，并聚合 `visual-summary.json`；视觉摘要再由 `report_html.py` 进入内容矩阵和爆款对比。场景与产品只输出启发式候选，必须复核；Tesseract 不存在时明确写 `ocr_status=unavailable`。
+4. `transcribe_bgm.py`：复用 `published` 发布成片混合音轨，读取 `transcript` 的 segments 排除口播时间窗，再对剩余非口播区间做能量、低频和情绪分析；默认不做第二次 Whisper。非口播时长或音频证据不足时写 `unknown/证据不足`，不得写成纯 BGM 或歌词。所有 BGM 结论均为描述性相关、非因果。
 5. `bgm_cross.py`：BGM×互动交叉 → `bgm/<account>/_cross.json`。
 5. （如需评论区）`comments.py`：`detail_comments_*.jsonl` 按视频归并、每视频按赞降序截断 top N → `video-analysis/<account>/comments.json`
 
-**提速要点**：下载/抽帧/转写均按产物存在性跳过已完成项，换新数据只跑增量；下载（网络 I/O）与抽帧（CPU）可并行；BGM 转写等口播转写完成后跑，避免争抢 CPU；逐帧画面分析用进程池并行（按核数/内存封顶 8）且按 `analysis` 字段断点续帧，中断重跑只补增量。
+**提速要点**：下载/抽帧/转写均按产物存在性和配置哈希跳过已完成项，换新数据只跑增量；下载（网络 I/O）与 GPU 抽帧可并行；BGM 默认不启动 ASR，兼容参数 `--music-asr` 会被忽略，不会与口播/抽帧争抢显存；逐帧画面分析用进程池并行（按核数/内存封顶 8）且按 `analysis` 字段断点续帧，中断重跑只补增量。`RunProgress` 在 `run-state.json` 记录阶段 `duration_sec`，抓取阶段同时记录节省的 detail/comment 请求等吞吐指标。
 
 ## 阶段 4：报告生成（report_html.py，v2 固定骨架直出 HTML）
 
@@ -114,8 +115,10 @@ py -3 <skill>\tools\runtime.py run --tool report_html.py --root <root> --account
 <root>/video-analysis/<account>/comments.json  comments 评论聚合（每视频按赞截断 top N）
 <root>/video-analysis/<account>/narrative.json report_html 定性槽位（AI 撰写，统计数字留空）
 <root>/videos/<account>/*.mp4              download 视频
+<root>/images/<account>/<aweme_id>/*        download 图文原图
 <root>/covers/<account>/*.jpg              download 封面
 <root>/transcript/<account>/*.txt|.json    transcribe 口播转写
+<root>/media-audio/<account>/published/*.mp3  music_download_url 发布成片混合音轨
 <root>/bgm/<account>/*.json|_manifest.json  transcribe_bgm BGM 归档
 <root>/bgm/<account>/_cross.json           bgm_cross BGM×互动交叉
 <root>/decompose/<account>/video_profiles.{json,md}   decompose_prep 全维度档案
@@ -137,15 +140,15 @@ python tools/crawl.py --root <root> --account <account> --mode search --target "
 
 # 2 去重 + 生成清单（--json 缺省取最新 jsonl）
 python tools/process.py --root <root> --account <account>
-# 2b 多线程下载视频+封面（并发自适应，默认 min(核,6)）
+# 2b 多线程下载视频+图文原图+封面（并发自适应，默认 min(核,6)）
 python tools/download.py --root <root> --account <account>
 
-# 3a 抽帧（默认1fps；多进程，默认 min(CPU核,4) 且受内存约束）
-python tools/extract_frames.py --root <root> --account <account> [--fps 1]
-# 3b 口播转写（GPU 自动择优 float16；断点续传；--map 订正术语误识）
-python tools/transcribe.py --root <root> --account <account> [--model large-v3] [--map <term_map.json>]
-# 3c BGM 归档（模型固定 large-v3）
-python tools/transcribe_bgm.py --root <root> --account <account>
+# 3a 抽帧（默认 auto：NVDEC/scale_cuda 两阶段；--device cpu 强制 PyAV；默认最多180帧）
+python tools/extract_frames.py --root <root> --account <account> [--fps 1] [--device auto|cuda|cpu] [--max-frames 180]
+# 3b 口播转写（优先 published 混合音轨；beam=1，低置信度自动 beam=5）
+python tools/transcribe.py --root <root> --account <account> [--model large-v3] [--device auto] [--compute auto] [--map <term_map.json>]
+# 3c BGM 归档（复用 published 混合音轨，默认不做第二次 Whisper）
+python tools/transcribe_bgm.py --root <root> --account <account> [--device auto] [--compute auto]
 # 3d BGM×互动交叉
 python tools/bgm_cross.py --root <root> --account <account> [--top 10]
 # 3e 评论聚合（前提：先把评论补抓落 detail_comments_*.jsonl）
@@ -164,9 +167,9 @@ Get-Content 博主全量视频总结.md -Raw | python tools/render_report.py --s
 
 要点：
 
-- **环境依赖**：process/download 仅需标准库；extract_frames 需 `av` + `Pillow`；transcribe 需 `faster-whisper`、`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（脚本自动把其 bin 加入 PATH 解决 `cublas64_12.dll not found`）。
+- **环境依赖**：process/download 仅需标准库；extract_frames 需 `av` + `Pillow`，GPU 优先路径还需带 CUDA/NVDEC 的 FFmpeg（不可用时自动 CPU）；transcribe 需 `faster-whisper`、`ctranslate2`，GPU 另装 `nvidia-cublas-cu12`（脚本自动把其 bin 加入 PATH 解决 `cublas64_12.dll not found`）。
 - **断点续传**：download / extract_frames / transcribe 均按产物已存在自动跳过，换新数据重跑即增量补齐。
-- **CPU vs GPU 择优**：transcribe 用 `ctranslate2.get_cuda_device_count()` 探测，`--device`/`--compute` 默认 `auto` 自动选 cuda/float16 或 cpu/int8。
+- **CPU vs GPU 择优**：口播/BGM ASR 用 `ctranslate2.get_cuda_device_count()` 探测，`--device`/`--compute` 默认 `auto` 自动选 cuda/float16 或 cpu/int8；抽帧另由 FFmpeg CUDA 探测，`--device auto` 优先 NVDEC/`scale_cuda`，单视频失败回退 CPU。
 - **并发自适应（推荐）**：download/extract_frames/transcribe 的并发缺省由 `tools/probe.py` 按 CPU 核数 + 内存占用率 + GPU 有无自动调度，显式传参可覆盖。
 - **报告**：定性内容取 `transcript/`（话术）与 `comments.json`（评论原声）撰写 narrative.json；统计数字、图（`covers/`+`frames/` 真实素材）由 `report_html.py` 全自动计算与内联，禁止手写统计数字。
 - **博主总结（阶段4b2 前置必跑）**：做账号级总结前必须先跑 `account_metrics.py` 生成 `_metrics.json`。三地映射：**发布节奏→二·选题地图(时间轴)**、**互动交叉聚类→七·爆款VS普通(分型)**、**话题策略+高赞评论→六·用户需求地图(评论区实证)**。

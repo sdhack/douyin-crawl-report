@@ -6,7 +6,11 @@
   只认 contents 文件——detail_comments/creator_comments 等评论产物 mtime 更晚，绝不能当视频源）。
 输出: <root>/video-analysis/<account>/manifest.json
 """
-import argparse, json, os, sys, glob
+import argparse, hashlib, json, os, sys, glob
+
+
+def music_key(url):
+    return hashlib.sha256(str(url).encode("utf-8")).hexdigest()[:24] if url else ""
 
 
 def source_jsonl(root, account):
@@ -60,25 +64,54 @@ def main():
 
     manifest = []
     for idx, r in enumerate(records, 1):
+        note_urls = [u.strip() for u in str(r.get("note_download_url") or "").split(",") if u.strip()]
+        music_url = r.get("music_download_url") or r.get("music_url") or ""
+        video_url = r.get("video_download_url") or ""
+        speech_url = video_url
         manifest.append({
             "rank": idx, "aweme_id": r["aweme_id"],
+            "aweme_type": int(r.get("aweme_type") or 0),
             "title": r.get("desc") or r.get("title") or "",
             "create_time": r.get("create_time"),
             "likes": r["_likes"], "comments": r["_comments"],
             "collects": r["_collects"], "shares": r["_shares"],
-            "video_url": r.get("video_download_url") or "",
+            "video_url": video_url,
             "cover_url": r.get("cover_url") or "",
-            "music_url": r.get("music_download_url") or "",
+            "music_url": music_url,
+            "music_key": music_key(music_url),
+            "published_audio_url": music_url,
+            "published_audio_key": music_key(music_url),
+            "published_audio_kind": "mixed_track" if music_url else "missing",
+            "speech_url": speech_url,
+            "speech_source": "local_video_then_remote_video" if video_url else "missing",
+            # Legacy fields retained for consumers not yet migrated to the
+            # separated speech/music contract.
+            "audio_url": music_url or video_url,
+            "audio_source": "music_download_url" if music_url else ("video_download_url" if video_url else "missing"),
+            "note_urls": note_urls,
         })
 
     mpath = os.path.join(outdir, "manifest.json")
-    with open(mpath, "w", encoding="utf-8") as f:
-        json.dump(manifest, f, ensure_ascii=False, indent=2)
+    tmp = mpath + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, mpath)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
     print(f"[数据源] {len(srcs)} 个文件：" + "、".join(os.path.basename(s) for s in srcs))
     print(f"[去重] 唯一视频数: {len(records)}")
     print(f"[OK] manifest.json -> {mpath}")
-    print(f"[下载] 有视频URL {sum(1 for m in manifest if m['video_url'])} / 缺失 {sum(1 for m in manifest if not m['video_url'])}")
+    videos = [m for m in manifest if m["aweme_type"] != 68]
+    notes = [m for m in manifest if m["aweme_type"] == 68]
+    print(f"[类型] 视频 {len(videos)} / 图文 {len(notes)}")
+    print(f"[下载] 视频 URL {sum(1 for m in videos if m['video_url'])}/{len(videos)} | "
+          f"图文原图 {sum(1 for m in notes if m['note_urls'])}/{len(notes)}")
 
 
 if __name__ == "__main__":

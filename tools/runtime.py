@@ -161,6 +161,26 @@ def required_ok(python):
         return False, f"run err: {e}"
 
 
+def utf8_env():
+    """Keep tool output and redirected logs readable on Windows consoles."""
+    env = dict(os.environ)
+    env.setdefault("PYTHONUTF8", "1")
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUNBUFFERED", "1")
+    return env
+
+
+def configure_utf8_stdio():
+    """Make this wrapper's own output deterministic before it starts child tools."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure:
+            try:
+                reconfigure(encoding="utf-8", errors="replace", write_through=True)
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv):
     if not argv:
         print("用法见文件头 docstring。")
@@ -227,7 +247,7 @@ def main(argv):
             sys.exit(2)
         args = argv[3:]
         p = cmd_py()
-        r = subprocess.run([p, tool_path] + args, cwd=os.getcwd())
+        r = subprocess.run([p, tool_path] + args, cwd=os.getcwd(), env=utf8_env())
         sys.exit(r.returncode)
     else:
         print(f"未知命令: {cmd}", file=sys.stderr)
@@ -235,4 +255,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
+    configure_utf8_stdio()
     main(sys.argv[1:])

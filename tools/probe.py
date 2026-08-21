@@ -4,6 +4,9 @@
 """
 
 import os
+import shutil
+import subprocess
+from functools import lru_cache
 
 
 def cpus():
@@ -48,18 +51,42 @@ def has_gpu():
         return False
 
 
+def ffmpeg_path():
+    """返回可执行 ffmpeg；抽帧 GPU 路径不依赖 ctranslate2。"""
+    return shutil.which("ffmpeg")
+
+
+@lru_cache(maxsize=1)
+def cuda_decoder_available():
+    """探测 FFmpeg 是否编译了 CUDA；驱动/单视频兼容性仍在实际运行时验证。"""
+    exe = ffmpeg_path()
+    if not exe:
+        return False
+    try:
+        p = subprocess.run([exe, "-hide_banner", "-hwaccels"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, timeout=8)
+        return p.returncode == 0 and any(line.strip().lower() == "cuda"
+                                         for line in p.stdout.splitlines())
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def download_threads():
     """下载是网络 I/O 型，主要看核数；给 2..6。"""
     return max(2, min(cpus(), 6))
 
 
-def frame_workers():
-    """抽帧是 CPU-bound。按核数封顶，并按可用内存封顶防 OOM（每 worker 峰值约 1.2GB）。"""
+def frame_workers(device=None):
+    """抽帧是 CPU-bound。最多用半数逻辑核，并按可用内存封顶防 OOM。"""
+    # NVDEC/scale_cuda 与同阶段 BGM/ASR 共享显卡时，默认单进程最稳定；显式 --workers 可覆盖。
+    if device == "cuda" or (device == "auto" and cuda_decoder_available()):
+        return 1
     cores = cpus()
     m = mem()
     # avail<=1GB 时旧版回退 8 与"内存越少 worker 越少"语义相反；低内存宁可单进程慢跑
     mem_cap = max(1, int(m["avail_gb"] / 1.2)) if m["avail_gb"] > 1 else 1
-    return max(1, min(cores, 4, mem_cap))
+    return max(1, min(max(1, cores // 2), 8, mem_cap))
 
 
 def transcribe_workers(gpu):

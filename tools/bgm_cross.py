@@ -1,21 +1,41 @@
 # -*- coding: utf-8 -*-
-"""BGM × 互动交叉统计：合并 manifest + BGM 归档 → 组间均值与爆款明细。
+"""Cross stats for BGM candidates in mixed-track non-speech windows.
 
-供报告的"BGM 视听分析"章节取实证数字（勿手写/臆断）。输出:
-  <root>/bgm/<account>/_cross.json
-    by_level / by_mood / by_vocal : 每组 {n, pct, avg_likes, avg_collects, avg_shares}
-    top_n                          : 按赞排序前 N 条的 {aweme_id, likes, bgm_level, mood, vocal}
-    summary                        : 关键对比（纯口播 vs 轻BGM 的均赞倍数 等）
-用法: python tools/bgm_cross.py --root <工作根> --account <slug> [--top 10]
-输入依赖: <root>/video-analysis/<account>/manifest.json（process.py 产出）
-          <root>/bgm/<account>/*.json（transcribe_bgm.py 产出）
+Only records with enough transcript-masked audio evidence are included in the
+denominator. Group differences are descriptive associations, not causal claims.
 """
-import argparse, os, json, glob
+import argparse
+import glob
+import json
+import os
+import tempfile
 
 
-def _avg(d, col):
-    x = list(col.items())
-    return round(sum(col[a] for a in d) / len(d), 1) if d else 0.0
+def _avg(ids, manifest_by_id, field):
+    values = [float(manifest_by_id[aid].get(field) or 0) for aid in ids]
+    return round(sum(values) / len(values), 1) if values else 0.0
+
+
+def _write_json_atomic(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=os.path.dirname(path),
+                                        prefix="._cross-", suffix=".tmp", delete=False) as f:
+            tmp = f.name
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def _sys_exit(msg):
+    import sys
+    sys.exit(msg)
 
 
 def main():
@@ -27,78 +47,99 @@ def main():
 
     mf_p = os.path.join(a.root, "video-analysis", a.account, "manifest.json")
     if not os.path.isfile(mf_p):
-        sys_exit(f"[ERR] 缺 manifest: {mf_p}（先跑 process.py）")
+        _sys_exit(f"[ERR] 缺 manifest: {mf_p}（先跑 process.py）")
     manifest = json.load(open(mf_p, encoding="utf-8"))
-    inter = {r["aweme_id"]: r for r in manifest}
+    inter = {str(r["aweme_id"]): r for r in manifest if int(r.get("aweme_type") or 0) != 68}
+    manifest_by_id = inter
 
     bgmd = {}
-    for f in glob.glob(os.path.join(a.root, "bgm", a.account, "*.json")):
-        # 跳过 _ 前缀内部文件（_manifest/_cross 等）：_cross 是本工具自己的产物，
-        # 无 aweme_id，重跑/增量跑时混入会 KeyError 崩溃
+    bgm_dir = os.path.join(a.root, "bgm", a.account)
+    for f in glob.glob(os.path.join(bgm_dir, "*.json")):
         if os.path.basename(f).startswith("_"):
             continue
         j = json.load(open(f, encoding="utf-8"))
-        bgmd[j["aweme_id"]] = j
+        if str(j.get("source_kind")) != "mixed_track":
+            _sys_exit(f"[ERR] BGM 归档 {f} 不是 published mixed track 新契约，请重跑 transcribe_bgm.py")
+        if j.get("cache_version") != "published-mixed-track-bgm-v3":
+            _sys_exit(f"[ERR] BGM 归档 {f} 使用旧 cache version，请重跑 transcribe_bgm.py")
+        bgmd[str(j["aweme_id"])] = j
     if not bgmd:
-        sys_exit(f"[ERR] 无 BGM 归档: <root>/bgm/{a.account}/（先跑 transcribe_bgm.py）")
+        _sys_exit(f"[ERR] 无混合音轨 BGM 归档: {bgm_dir}（先跑 transcribe_bgm.py）")
+    missing = sorted(set(inter) - set(bgmd))
+    if missing:
+        preview = ",".join(missing[:10]) + ("..." if len(missing) > 10 else "")
+        _sys_exit(f"[ERR] 混合音轨 BGM 归档不完整: 缺 {len(missing)}/{len(inter)} 个视频（{preview}）")
 
-    groups = {"by_level": ["bgm_level", {"none": "纯口播/无BGM", "light": "轻BGM垫底", "full": "强BGM"}],
-              "by_mood": ["mood", None],
-              "by_vocal": ["vocal", None]}
-    out, out["n"] = {}, len(inter)
+    def _analysis_status(record):
+        # New records are authoritative; source_status remains a legacy alias.
+        return record.get("analysis_status") or record.get("source_status") or "unknown"
+
+    evidence = {aid: b for aid, b in bgmd.items()
+                if aid in inter and _analysis_status(b) == "ok"
+                and b.get("source_kind") == "mixed_track"
+                and b.get("analysis_scope") == "non_speech_windows"
+                and b.get("non_speech_seconds", 0) >= 3.0
+                and b.get("non_speech_coverage", 0) >= 0.10
+                and b.get("bgm_level") in ("none", "light", "full")}
+    excluded = {aid: _analysis_status(b) for aid, b in bgmd.items() if aid not in evidence}
+    n = len(evidence)
+    groups = {
+        "by_level": ["bgm_level", {"none": "无明确 BGM 候选", "light": "轻度 BGM 候选", "full": "强度 BGM 候选"}],
+        "by_mood": ["mood", None],
+        "by_vocal": ["vocal", None],
+    }
+    out = {"cache_version": "published-mixed-track-bgm-v3", "source_kind": "mixed_track",
+           "analysis_scope": "non_speech_windows", "n": n,
+           "total_video_records": len(inter), "excluded_records": len(excluded),
+           "excluded_status": {}, "limitations": ["仅统计足够非口播窗口证据；组间差异为相关非因果"]}
+    for status in excluded.values():
+        out["excluded_status"][status] = out["excluded_status"].get(status, 0) + 1
+
     for key, (field, labels) in groups.items():
-        g = {}
-        for aid, r in inter.items():
-            b = bgmd.get(aid)
-            if not b:
-                continue
-            g.setdefault(b.get(field, "?"), []).append(aid)
+        grouped = {}
+        for aid, record in evidence.items():
+            grouped.setdefault(record.get(field, "unknown"), []).append(aid)
         stat = {}
-        for val, ids in g.items():
-            stat[val] = {
+        for value, ids in grouped.items():
+            stat[value] = {
                 "n": len(ids),
-                "pct": round(len(ids) * 100 / len(inter), 1),
-                "avg_likes": _avg(ids, {aid: inter[aid].get("likes", 0) for aid in inter}),
-                "avg_collects": _avg(ids, {aid: inter[aid].get("collects", 0) for aid in inter}),
-                "avg_shares": _avg(ids, {aid: inter[aid].get("shares", 0) for aid in inter}),
-                "label": (labels or {})[val] if labels else val,
+                "pct": round(len(ids) * 100 / n, 1) if n else 0.0,
+                "avg_likes": _avg(ids, manifest_by_id, "likes"),
+                "avg_collects": _avg(ids, manifest_by_id, "collects"),
+                "avg_shares": _avg(ids, manifest_by_id, "shares"),
+                "label": (labels or {}).get(value, value) if labels else value,
             }
         out[key] = stat
 
-    top = sorted(inter.values(), key=lambda r: r.get("likes", 0), reverse=True)[:a.top]
-    out["top_n"] = [{
-        "aweme_id": r["aweme_id"], "likes": r.get("likes", 0),
-        "bgm_level": bgmd.get(r["aweme_id"], {}).get("bgm_level", "?"),
-        "mood": bgmd.get(r["aweme_id"], {}).get("mood", "?"),
-        "vocal": bgmd.get(r["aweme_id"], {}).get("vocal", "?"),
-    } for r in top]
+    top = sorted((manifest_by_id[aid] for aid in evidence),
+                 key=lambda r: r.get("likes", 0), reverse=True)[:max(0, a.top)]
+    out["top_n"] = [{"aweme_id": str(r["aweme_id"]), "likes": r.get("likes", 0),
+                      "bgm_level": evidence[str(r["aweme_id"])].get("bgm_level", "unknown"),
+                      "mood": evidence[str(r["aweme_id"])].get("mood", "unknown"),
+                      "vocal": evidence[str(r["aweme_id"])].get("vocal", "unknown"),
+                      "non_speech_seconds": evidence[str(r["aweme_id"])].get("non_speech_seconds", 0)}
+                     for r in top]
 
-    # summary：关键对比（分母均值为 0 时该倍数无意义，省略该键而非除零崩溃）
     def _mult(num, den):
-        return round(num / den, 1) if den else None
+        return round(num / den, 3) if den else None
 
-    L = out["by_level"]
-    no, lt = L.get("none"), L.get("light")
-    if no and lt:
+    levels = out["by_level"]
+    no, light = levels.get("none"), levels.get("light")
+    if no and light:
         summary = {
-            "light_vs_none_like_mult": _mult(lt["avg_likes"], no["avg_likes"]),
-            "light_vs_none_collect_mult": _mult(lt["avg_collects"], no["avg_collects"]),
-            "light_vs_none_share_mult": _mult(lt["avg_shares"], no["avg_shares"]),
+            "light_candidate_vs_none_candidate_like_mult": _mult(light["avg_likes"], no["avg_likes"]),
+            "light_candidate_vs_none_candidate_collect_mult": _mult(light["avg_collects"], no["avg_collects"]),
+            "light_candidate_vs_none_candidate_share_mult": _mult(light["avg_shares"], no["avg_shares"]),
         }
         out["summary"] = {k: v for k, v in summary.items() if v is not None}
 
-    op = os.path.join(a.root, "bgm", a.account, "_cross.json")
-    json.dump(out, open(op, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    print(f"[bgm_cross] {a.account}: n={out['n']} top={len(out['top_n'])}")
-    if "summary" in out:
-        s = out["summary"]
-        print("  轻BGM/纯口播 " + " ".join(
-            f"{k.rsplit('_', 2)[0].replace('light_vs_none_', '')}×{v}" for k, v in s.items()))
+    op = os.path.join(bgm_dir, "_cross.json")
+    _write_json_atomic(op, out)
+    print(f"[bgm_cross] {a.account}: evidence_n={n} excluded={len(excluded)} top={len(out['top_n'])}")
+    if out.get("summary"):
+        print("  轻度候选/无明确候选 " + " ".join(f"{k}={v}" for k, v in out["summary"].items()))
     print(f"[manifest] {op}")
 
-def sys_exit(msg):
-    import sys
-    sys.exit(msg)
 
 if __name__ == "__main__":
     main()

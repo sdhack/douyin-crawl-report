@@ -3,7 +3,7 @@
 
 骨架恒定固化（对齐 references/report-template.md v2，10 区结构）：
   文档头(masthead+meta) → 侧栏导航 → s0 数据构成 → s1 核心结论 → s2 对标方法
-  → s3 达人画像 → s4 内容矩阵 → s5 文案拆解 → s6 评论区实证 → s7 BGM×互动
+  → s3 达人画像 → s4 内容矩阵 → s5 文案拆解 → s6 评论区实证 → s7 BGM候选×互动
   → s8 变现逻辑 → s9 起号方案 → 诚实口径附言
 所有数字实时从管线产物计算（manifest / comments / bgm _cross / frames / covers /
 transcript 目录），杜绝手写数字与数据漂移；定性结论经 --narrative JSON 提供，
@@ -124,12 +124,13 @@ def hbar(pct, label, val, color):
 CSS = """
 :root{__TOKENS__}
 *{margin:0;padding:0;box-sizing:border-box}
+html,body{max-width:100%;overflow-x:hidden}
 body{font-family:var(--sans, -apple-system,"Segoe UI","Microsoft YaHei",sans-serif);background:var(--paper);color:var(--ink);line-height:1.75}
-.page{max-width:1080px;margin:0 auto;padding:0 28px 80px}
+.page{width:100%;max-width:1080px;margin:0 auto;padding:0 28px 80px;min-width:0}
 .ic{vertical-align:-3px}
 .masthead{padding:64px 0 36px;border-bottom:3px solid var(--ink)}
 .kicker{font-size:13px;letter-spacing:3px;color:var(--rose);font-weight:600;text-transform:uppercase;margin-bottom:14px}
-h1{font-family:var(--serif);font-size:38px;font-weight:700;letter-spacing:1px}
+h1{font-family:var(--serif);font-size:38px;font-weight:700;letter-spacing:1px;overflow-wrap:anywhere}
 .subtitle{font-family:var(--serif);font-size:17px;color:var(--ink-70);margin-top:8px;font-style:italic}
 .meta-line{display:flex;gap:22px;flex-wrap:wrap;margin-top:22px;font-size:13px;color:var(--ink-70)}
 .meta-line span{display:flex;align-items:center;gap:6px}
@@ -137,7 +138,8 @@ nav{position:sticky;top:0;z-index:50;background:var(--card);border-bottom:1px so
 nav .nav-in{display:flex;gap:6px;flex-wrap:wrap}
 nav a{font-size:13px;color:var(--ink-70);text-decoration:none;padding:5px 12px;border-radius:20px;border:1px solid transparent;transition:.2s}
 nav a:hover{color:var(--rose);border-color:var(--rose)}
-.intro{display:grid;grid-template-columns:1.5fr 1fr;gap:28px;margin-bottom:40px}
+.intro{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:28px;margin-bottom:40px}
+.intro>*{min-width:0}
 .intro p{color:var(--ink-70);font-size:14.5px}
 .pill-box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;align-self:start}
 .pill-box h4{font-size:13px;color:var(--gold);margin-bottom:10px;letter-spacing:1px}
@@ -161,7 +163,7 @@ p{margin-bottom:12px;font-size:14.5px}
 .note b{color:var(--gold)}
 .ki{background:var(--rose-bg);border-left:3px solid var(--rose);padding:12px 16px;border-radius:0 10px 10px 0;font-size:13.5px;margin:14px 0}
 .ki b{color:var(--rose)}
-table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px;margin:14px 0}
+table{width:100%;max-width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:13.5px;margin:14px 0}
 th{background:var(--ink);color:var(--on-ink,#fff);padding:10px 12px;text-align:left;font-weight:500;font-size:12.5px;letter-spacing:.5px}
 td{padding:9px 12px;border-top:1px solid var(--line);vertical-align:middle}
 tr.hot td{background:var(--rose-bg)}
@@ -218,7 +220,27 @@ svg text{font-family:var(--sans,-apple-system,"Segoe UI","Microsoft YaHei",sans-
 /* 圆角与阴影也纳入 AI 可定制的 token（高可读性基线保证） */
 .sample,.stat,.fcell,.qcard,.fcard,.pill-box,.chart-card,.qgroup{border-radius:var(--radius,14px)}
 .chart-card,.sample,.qcard,.pill-box,.fcell{border-radius:var(--radius,14px)}
-@media(max-width:900px){.samples{grid-template-columns:repeat(2,1fr)}.stats{grid-template-columns:repeat(2,1fr)}.intro{grid-template-columns:1fr}.qgrid,.qcols{grid-template-columns:1fr}.fgallery{grid-template-columns:repeat(3,1fr)}.formula{grid-template-columns:1fr 1fr}.chart-grid{grid-template-columns:1fr}}
+@media(max-width:900px){
+  .page{padding:0 18px 56px}
+  .masthead{padding:42px 0 28px}
+  h1{font-size:30px;line-height:1.35}
+  .subtitle{font-size:15px}
+  .meta-line{gap:10px 16px}
+  nav{position:static;margin-bottom:28px}
+  nav .nav-in{gap:2px}
+  nav a{padding:4px 7px;font-size:12px}
+  .samples{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .intro{grid-template-columns:minmax(0,1fr)}
+  .qgrid,.qcols{grid-template-columns:minmax(0,1fr)}
+  .fgallery{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .formula{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .chart-grid{grid-template-columns:minmax(0,1fr)}
+  table{display:block;overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch}
+  .chart-card{padding:16px;overflow:hidden}
+  .hbar{grid-template-columns:86px minmax(0,1fr);gap:8px}
+  .hb-v{grid-column:2;text-align:left}
+}
 """
 
 # ---------------- 设计系统（骨架不变，美学完全由 AI 决定） ----------------
@@ -395,7 +417,7 @@ def chart_bgm_compare(L):
     keys = [k for k in ("none", "light", "full") if k in L]
     if len(keys) < 2:
         return ""
-    labels = {"none": "无BGM", "light": "轻BGM", "full": "强BGM"}
+    labels = {"none": "无明确 BGM 候选", "light": "轻度 BGM 候选", "full": "强度 BGM 候选"}
     rows = [(labels[k], L[k].get("avg_likes", 0), L[k].get("avg_collects", 0), L[k].get("avg_shares", 0)) for k in keys]
     cols = ["var(--c1)", "var(--c2)", "var(--c3)"]
     mx = max(max(r[1:]) for r in rows) or 1
@@ -412,16 +434,140 @@ def chart_bgm_compare(L):
     legend = '<div class="legend">' + "".join(
         '<span><i style="background:%s"></i>%s</span>' % (cols[i], lbl)
         for i, lbl in enumerate(["均赞", "均藏", "均转"])) + '</div>'
-    return svg_chart(bars, 436, 120, "BGM 强度 × 互动对比", "数据：_cross.json", legend)
+    return svg_chart(bars, 436, 120, "混合音轨非口播窗口 BGM 候选 × 互动", "数据：_cross.json（仅足够非口播证据）", legend)
 
 def load_json(path):
     return json.load(open(path, encoding="utf-8")) if path and os.path.isfile(path) else None
+
+def visual_records(data):
+    """读取视觉摘要并只保留带 aweme_id 的视频级记录。"""
+    if isinstance(data, dict):
+        data = data.get("videos") or data.get("records") or []
+    if not isinstance(data, list):
+        return []
+    return [v for v in data if isinstance(v, dict) and v.get("aweme_id")]
+
+def _visual_value(v, *keys, default=""):
+    cur = v
+    for key in keys:
+        cur = cur.get(key) if isinstance(cur, dict) else None
+    return default if cur is None else cur
+
+def _visual_mode(rows, *keys):
+    vals = [_visual_value(v, *keys) for v in rows]
+    vals = [str(x) for x in vals if x not in (None, "", "unknown")]
+    return Counter(vals).most_common(1)[0][0] if vals else "unknown"
+
+def _visual_pct(rows, predicate):
+    return sum(1 for v in rows if predicate(v)) * 100.0 / len(rows) if rows else 0.0
+
+def _visual_label(value, kind):
+    maps = {
+        "style": {"balanced": "均衡", "balanced_muted": "均衡·低饱和", "high_key_muted": "高明度·低饱和"},
+        "temperature": {"warm": "暖色", "neutral": "中性", "cool": "冷色"},
+        "composition": {"centered": "居中", "rule_of_thirds": "三分法"},
+        "scene": {"indoor_or_closeup_candidate": "室内/近景候选", "outdoor_candidate": "户外候选"},
+    }
+    return maps.get(kind, {}).get(str(value), str(value) or "未知")
+
+def build_visual_section(visual_rows, manifest_rows, visual_by_aid, top_count, account):
+    """生成 03 内容矩阵内的视觉策略小节；所有数值均由摘要与 manifest 现场计算。"""
+    if not visual_rows:
+        return ""
+    total = len(visual_rows)
+    styles = Counter(str(_visual_value(v, "visual_style", default="unknown")) for v in visual_rows)
+    temps = Counter(str(_visual_value(v, "color", "temperature", default="unknown")) for v in visual_rows)
+    comps = Counter(str(_visual_value(v, "composition", "dominant", default="unknown")) for v in visual_rows)
+    scenes = Counter(str(_visual_value(v, "scene", "dominant_candidate", default="unknown")) for v in visual_rows)
+    product_n = sum(1 for v in visual_rows if float(_visual_value(v, "product_exposure", "candidate_frame_ratio", default=0) or 0) > 0)
+    product_frame_mean = sum(float(_visual_value(v, "product_exposure", "candidate_frame_ratio", default=0) or 0) for v in visual_rows) / total
+
+    def bars(counter, kind):
+        ordered = counter.most_common()
+        mx = ordered[0][1] if ordered else 1
+        return "".join(hbar(v * 100.0 / total, _visual_label(k, kind), "%d条 · %.1f%%" % (v, v * 100.0 / total),
+                          "var(--c%d)" % (i % 4 + 1)) for i, (k, v) in enumerate(ordered) if k != "unknown")
+
+    style_bars = bars(styles, "style")
+    temp_bars = bars(temps, "temperature")
+    comp_bars = bars(comps, "composition")
+    scene_bars = bars(scenes, "scene")
+    unmatched = max(0, len(manifest_rows) - total)
+    source_note = "已按 manifest.aweme_id 关联 %d/%d 条作品。" % (total, len(manifest_rows))
+    if unmatched:
+        source_note += " 另有 %d 条 manifest 作品缺少视觉摘要，未纳入分布。" % unmatched
+
+    # OCR 状态必须显式来自产物；字段不存在时只能报告缺源，不能把 frame_ratio=0 当成无字幕。
+    ocr_values = []
+    for v in visual_rows:
+        for path in (("ocr_status",), ("ocr", "status"), ("subtitles", "ocr_status"), ("subtitles", "ocr", "status")):
+            value = _visual_value(v, *path, default=None)
+            if value is not None:
+                ocr_values.append(str(value).lower())
+                break
+    if not ocr_values or all(x in ("unavailable", "missing", "unknown", "none") for x in ocr_values):
+        subtitle_note = "OCR unavailable/缺源：当前视觉摘要未提供可用 OCR 状态或文本证据；字幕比例不作判断，不能将 frame_ratio=0 解读为无字幕。"
+    else:
+        subtitle_note = "字幕分布仅按视觉摘要提供的 OCR 结果统计；未提供 OCR 结果的记录不纳入字幕判断。"
+
+    # 互动组比较使用点赞前 20%；两组都至少 5 条时才展示，避免小样本制造假差异。
+    ranked = sorted((m for m in manifest_rows if str(m.get("aweme_id")) in visual_by_aid), key=lambda m: -m.get("likes", 0))
+    top_rows = ranked[:top_count]
+    other_rows = ranked[top_count:]
+    comparison = ""
+    if len(top_rows) >= 5 and len(other_rows) >= 5:
+        top_visual = [visual_by_aid[str(m["aweme_id"])] for m in top_rows]
+        other_visual = [visual_by_aid[str(m["aweme_id"])] for m in other_rows]
+        def mode_line(rows, keys, kind):
+            return "%s（%.1f%%）" % (esc(_visual_label(_visual_mode(rows, *keys), kind)),
+                                    _visual_pct(rows, lambda x: _visual_value(x, *keys, default="unknown") == _visual_mode(rows, *keys)))
+        def product_line(rows):
+            return "%.1f%%（候选帧占比均值 %.1f%%）" % (
+                _visual_pct(rows, lambda x: float(_visual_value(x, "product_exposure", "candidate_frame_ratio", default=0) or 0) > 0),
+                sum(float(_visual_value(x, "product_exposure", "candidate_frame_ratio", default=0) or 0) for x in rows) * 100.0 / len(rows))
+        comparison = '''
+<h3>%s 3.7 Top互动组 vs 其他组（视觉差异）</h3>
+<p class="note"><b>分组口径：</b>按点赞排序，Top互动组为前 %d 条，其他组 %d 条；仅展示样本均不少于 5 条的比较。场景和产品露出均为 heuristic 候选，待人工复核。</p>
+<table><tr><th>视觉维度</th><th>Top互动组（n=%d）</th><th>其他组（n=%d）</th></tr>
+<tr><td>画风</td><td>%s</td><td>%s</td></tr>
+<tr><td>色温</td><td>%s</td><td>%s</td></tr>
+<tr><td>构图</td><td>%s</td><td>%s</td></tr>
+<tr><td>场景候选（heuristic）</td><td>%s</td><td>%s</td></tr>
+<tr><td>产品露出候选（heuristic）</td><td>%s</td><td>%s</td></tr></table>''' % (
+            icon("chart"), len(top_rows), len(other_rows), len(top_rows), len(other_rows),
+            mode_line(top_visual, ("visual_style",), "style"), mode_line(other_visual, ("visual_style",), "style"),
+            mode_line(top_visual, ("color", "temperature"), "temperature"), mode_line(other_visual, ("color", "temperature"), "temperature"),
+            mode_line(top_visual, ("composition", "dominant"), "composition"), mode_line(other_visual, ("composition", "dominant"), "composition"),
+            mode_line(top_visual, ("scene", "dominant_candidate"), "scene"), mode_line(other_visual, ("scene", "dominant_candidate"), "scene"),
+            product_line(top_visual), product_line(other_visual))
+
+    return '''
+<h3>%s 3.6 视觉策略分布（自动统计）</h3>
+<p>%s</p>
+<div class="chart-grid">
+<div class="chart-card"><h4>画风</h4><div class="hbars">%s</div></div>
+<div class="chart-card"><h4>色温</h4><div class="hbars">%s</div></div>
+<div class="chart-card"><h4>构图</h4><div class="hbars">%s</div></div>
+<div class="chart-card"><h4>场景候选（heuristic/待复核）</h4><div class="hbars">%s</div></div>
+</div>
+<div class="note"><b>产品露出候选（heuristic/待复核）：</b>%d/%d 条作品出现候选帧（%.1f%%）；候选帧占比均值 %.1f%%。这不是产品识别结果。</div>
+<div class="note"><b>字幕：</b>%s</div>
+%s
+<p class="src">数据来源：video-analysis/%s/_visual-summary.json；%s 真实关键帧证据见上方 3.3 爆款关键帧切片与 3.5 各内容主题代表画面。</p>''' % (
+        icon("image"), source_note, style_bars, temp_bars, comp_bars, scene_bars,
+        product_n, total, product_n * 100.0 / total, product_frame_mean * 100.0, subtitle_note,
+        comparison, esc(account), source_note)
 
 def count_transcripts(root, account):
     d = os.path.join(root, "transcript", account)
     if not os.path.isdir(d):
         return 0
-    return sum(len([f for f in fs if f.endswith((".json", ".txt", ".md"))]) for _, _, fs in os.walk(d))
+    stems = set()
+    for _, _, files in os.walk(d):
+        for name in files:
+            if name.endswith((".json", ".txt", ".md")):
+                stems.add(os.path.splitext(name)[0])
+    return len(stems)
 
 def build(args):
     root, acc = args.root, args.account
@@ -434,6 +580,15 @@ def build(args):
         raise SystemExit("[ERR] 缺 manifest：%s（先跑 process.py）" % man_p)
     comments = load_json(os.path.join(root, "video-analysis", acc, "comments.json"))
     cross = load_json(os.path.join(root, "bgm", acc, "_cross.json"))
+    cross_invalid = bool(cross) and not (
+        cross.get("cache_version") == "published-mixed-track-bgm-v3"
+        and cross.get("source_kind") == "mixed_track"
+        and cross.get("analysis_scope") == "non_speech_windows"
+    )
+    if cross_invalid:
+        cross = None
+    visual_data = load_json(os.path.join(root, "video-analysis", acc, "_visual-summary.json"))
+    visual_by_aid = {str(v["aweme_id"]): v for v in visual_records(visual_data)}
 
     n = len(man)
     bya = {m["aweme_id"]: m for m in man if m.get("aweme_id")}
@@ -476,12 +631,16 @@ def build(args):
     missing = []
     if not comments:
         missing.append("评论（comments.json）")
-    if not cross:
-        missing.append("BGM 交叉（_cross.json）")
+    if cross_invalid:
+        missing.append("BGM 候选交叉（_cross.json 需重跑新契约）")
+    elif not cross:
+        missing.append("BGM 候选交叉（_cross.json）")
     if not n_fvids:
         missing.append("关键帧（frames/）")
     if not n_tr:
         missing.append("口播逐字稿（transcript/）")
+    if not visual_by_aid:
+        missing.append("视觉摘要（_visual-summary.json）")
 
     # ---- s0 数据构成 ----
     meta_items = ['<span>%s %d 条作品全量</span>' % (icon("video"), n)]
@@ -492,7 +651,7 @@ def build(args):
         meta_items.append('<span>%s %s 条评论实证</span>' % (icon("chat"), f"{nc_all:,}"))
     if cross:
         n_bgm = sum(v["n"] for v in cross.get("by_level", {}).values())
-        meta_items.append('<span>%s %d 份 BGM 档案</span>' % (icon("music"), n_bgm))
+        meta_items.append('<span>%s %d 份混合音轨 BGM 候选档案</span>' % (icon("music"), n_bgm))
     meta_items.append('<span>%s %d 封面%s</span>' % (icon("image"),
         sum(1 for m in man if os.path.isfile(os.path.join(covers_d, m["aweme_id"] + ".jpg"))),
         (" + %d 视频关键帧" % n_fvids) if n_fvids else "（关键帧缺源）"))
@@ -513,11 +672,11 @@ def build(args):
         samples.append('<div class="sample">%s<b>%s</b><small>真实评论<br>（%d 视频覆盖）</small></div>'
                        % (icon("chat", 22), f"{nc_all:,}", len(comments["by_aweme"])))
     if n_fvids:
-        samples.append('<div class="sample">%s<b>%d</b><small>视频关键帧轨<br>（1fps 共 %s 张）</small></div>'
+        samples.append('<div class="sample">%s<b>%d</b><small>视频关键帧轨<br>（自适应抽帧 共 %s 张）</small></div>'
                        % (icon("image", 22), n_fvids, f"{n_frames:,}"))
     if cross:
         n_bgm = sum(v["n"] for v in cross.get("by_level", {}).values())
-        samples.append('<div class="sample">%s<b>%d</b><small>BGM 档案<br>（强度+情绪）</small></div>' % (icon("music", 22), n_bgm))
+        samples.append('<div class="sample">%s<b>%d</b><small>混合音轨 BGM 候选<br>（非口播窗口证据）</small></div>' % (icon("music", 22), n_bgm))
 
     # ---- s1 核心结论 ----
     rate_c = sum_c * 100.0 / sum_likes if sum_likes else 0
@@ -615,8 +774,10 @@ def build(args):
     for k in order:
         for m in top:
             if theme_of(m) == k and frame(m["aweme_id"]):
+                vr = visual_by_aid.get(str(m["aweme_id"]), {})
+                vtag = _visual_label(_visual_value(vr, "visual_style", default="unknown"), "style")
                 theme_frames += ('<figure class="fcard"><img src="%s" alt="%s"><figcaption>%s %s · %s</figcaption></figure>'
-                                 % (frame(m["aweme_id"]), esc(k), icon("tag", 11), f"{m.get('likes',0):,}", esc(k)))
+                                 % (frame(m["aweme_id"]), esc(k), icon("tag", 11), f"{m.get('likes',0):,}", esc("%s · %s" % (k, vtag))))
                 break
 
     top_rows = ""
@@ -637,11 +798,16 @@ def build(args):
     for m in top:
         f = frame(m["aweme_id"])
         if f:
+            vr = visual_by_aid.get(str(m["aweme_id"]), {})
+            vtag = _visual_label(_visual_value(vr, "visual_style", default="unknown"), "style")
             frame_cards += ('<figure class="fcard"><img src="%s" alt="关键帧"><figcaption>%s %s · %s</figcaption></figure>'
-                            % (f, icon("fire", 12), f"{m.get('likes',0):,}", esc((m.get("title") or "")[:16])))
+                            % (f, icon("fire", 12), f"{m.get('likes',0):,}", esc("%s · %s" % ((m.get("title") or "")[:16], vtag))))
             nf += 1
             if nf >= args.frames_n:
                 break
+    visual_rows = [v for aid, v in visual_by_aid.items() if str(aid) in {str(k) for k in bya}]
+    visual_top_count = max(5, int(math.ceil(len(visual_rows) * 0.2))) if visual_rows else 0
+    visual_section = build_visual_section(visual_rows, man, visual_by_aid, visual_top_count, acc) if visual_rows else ""
     formula_html = "".join('<div class="fcell"><b>%s</b>%s</div>' % (esc(c["t"]), esc(c["d"])) for c in nar.get("formula", []))
 
     # ---- s6 评论区实证 ----
@@ -652,7 +818,13 @@ def build(args):
                       key=lambda x: -x[0])
         nc, nv = len(allc), len(by)
         pats = nar.get("comment_patterns") or DEFAULT_COMMENT_PATTERNS
-        themes = [(k, sum(1 for _, t, _ in allc if re.search(p, t))) for k, p in pats.items()]
+        theme_counts = Counter()
+        for _, text, _ in allc:
+            for key, pattern in pats.items():
+                if re.search(pattern, text):
+                    theme_counts[key] += 1
+                    break
+        themes = [(key, theme_counts[key]) for key in pats]
         theme_bars = "".join(hbar(v * 100.0 / nc if nc else 0, k, "%d条 · %.1f%%" % (v, v * 100.0 / nc if nc else 0),
                                   "var(--gold)" if k in WARN_THEMES else "var(--rose)") for k, v in themes)
         comment_cards = "".join(
@@ -691,42 +863,52 @@ def build(args):
 {('<div class="ki">' + esc(nar["s6_ki"]) + "</div>") if nar.get("s6_ki") else ""}
 </section>'''
 
-    # ---- s7 BGM×互动 ----
+    # ---- s7 混合音轨非口播窗口 BGM 候选 × 互动 ----
     sec7 = ""
     if cross:
-        L = cross.get("by_level", {})
-        rows7 = ""
-        for k, label in (("none", "纯口播/无BGM"), ("light", "轻BGM垫底"), ("full", "强BGM")):
-            if k not in L:
-                continue
-            v = L[k]
-            rows7 += ('<tr><td><b>%s</b></td><td>%d</td><td>%.1f%%</td><td><b>%.0f</b></td><td>%.0f</td><td>%.0f</td></tr>'
-                      % (esc(v.get("label") or label), v["n"], v["pct"], v["avg_likes"], v["avg_collects"], v["avg_shares"]))
-        s = cross.get("summary", {})
-        mult = ("轻 BGM 比纯口播均赞 ×%s、收藏 ×%s、分享 ×%s。"
-                % (s.get("light_vs_none_like_mult", "-"), s.get("light_vs_none_collect_mult", "-"),
-                   s.get("light_vs_none_share_mult", "-"))) if s else ""
-        moods = cross.get("by_mood", {})
-        best_mood = max(moods, key=lambda k: moods[k]["avg_likes"]) if moods else ""
-        mood_line = ("情绪维度：「%s」均赞最高（%.0f）。" % (esc(best_mood), moods[best_mood]["avg_likes"])) if best_mood else ""
-        chart_bgm = chart_bgm_compare(L)
-        mood_bars = ""
-        if moods:
-            mxm = max(v["avg_likes"] for v in moods.values()) or 1
-            for k in sorted(moods, key=lambda x: -moods[x]["avg_likes"]):
-                v = moods[k]
-                bh = 60 * v["avg_likes"] / mxm
-                mood_bars += ('<div class="hbar"><span class="hb-l">%s</span><div class="hb-track">'
-                              '<div class="hb-fill" style="width:%.1f%%;background:var(--c3)"></div></div>'
-                              '<span class="hb-v">均赞 %.0f · %d 条</span></div>'
-                              % (esc(k), bh, v["avg_likes"], v["n"]))
-        sec7 = f'''
-<section id="s7"><h2>06 · BGM × 互动交叉</h2>
-<div class="sec-sub">BGM 归档与互动指标的组间统计（数字取自 _cross.json，勿手写）</div>
+        evidence_n = int(cross.get("n") or 0)
+        if evidence_n <= 0:
+            excluded = int(cross.get("excluded_records") or 0)
+            sec7 = f'''
+<section id="s7"><h2>06 · 混合音轨非口播窗口 BGM 候选 × 互动</h2>
+<div class="sec-sub">有效非口播窗口证据不足，本节不纳入互动统计</div>
+<div class="note"><b>证据状态：</b>共 {int(cross.get("total_video_records") or 0)} 条视频记录，{excluded} 条因非口播窗口不足被排除；没有可展示的 BGM 候选组间数字。</div>
+</section>'''
+        else:
+            L = cross.get("by_level", {})
+            rows7 = ""
+            for k, label in (("none", "无明确 BGM 候选"), ("light", "轻度 BGM 候选"), ("full", "强度 BGM 候选")):
+                if k not in L:
+                    continue
+                v = L[k]
+                rows7 += ('<tr><td><b>%s</b></td><td>%d</td><td>%.1f%%</td><td><b>%.0f</b></td><td>%.0f</td><td>%.0f</td></tr>'
+                          % (esc(v.get("label") or label), v["n"], v["pct"], v["avg_likes"], v["avg_collects"], v["avg_shares"]))
+            s = cross.get("summary", {})
+            mult = ("轻度 BGM 候选相比无明确 BGM 候选，均赞 ×%s、收藏 ×%s、分享 ×%s（相关非因果）。"
+                    % (s.get("light_candidate_vs_none_candidate_like_mult", "-"),
+                       s.get("light_candidate_vs_none_candidate_collect_mult", "-"),
+                       s.get("light_candidate_vs_none_candidate_share_mult", "-"))) if s else ""
+            moods = cross.get("by_mood", {})
+            best_mood = max(moods, key=lambda k: moods[k]["avg_likes"]) if moods else ""
+            mood_line = ("非口播窗口情绪候选中，「%s」均赞最高（%.0f）。" % (esc(best_mood), moods[best_mood]["avg_likes"])) if best_mood else ""
+            chart_bgm = chart_bgm_compare(L)
+            mood_bars = ""
+            if moods:
+                mxm = max(v["avg_likes"] for v in moods.values()) or 1
+                for k in sorted(moods, key=lambda x: -moods[x]["avg_likes"]):
+                    v = moods[k]
+                    bh = 60 * v["avg_likes"] / mxm
+                    mood_bars += ('<div class="hbar"><span class="hb-l">%s</span><div class="hb-track">'
+                                  '<div class="hb-fill" style="width:%.1f%%;background:var(--c3)"></div></div>'
+                                  '<span class="hb-v">均赞 %.0f · %d 条</span></div>'
+                                  % (esc(k), bh, v["avg_likes"], v["n"]))
+            sec7 = f'''
+<section id="s7"><h2>06 · 混合音轨非口播窗口 BGM 候选 × 互动</h2>
+<div class="sec-sub">仅统计混合音轨中排除口播后的非口播窗口；数字取自 _cross.json，组间差异为相关非因果</div>
 {chart_bgm}
-<table><tr><th>BGM 强度</th><th>条数</th><th>占比</th><th>均赞</th><th>均藏</th><th>均转</th></tr>{rows7}</table>
+<table><tr><th>BGM 候选等级</th><th>有效视频数</th><th>占比</th><th>均赞</th><th>均藏</th><th>均转</th></tr>{rows7}</table>
 <p>{mood_line}{mult}</p>
-{('<h3>' + icon_for('BGM音乐') + ' 6.2 情绪维度均赞分布</h3><div class="hbars">' + mood_bars + '</div>') if mood_bars else ''}
+{('<h3>' + icon_for('BGM音乐') + ' 6.2 非口播窗口情绪候选均赞分布</h3><div class="hbars">' + mood_bars + '</div>') if mood_bars else ''}
 {('<div class="ki">' + esc(nar["s7_ki"]) + "</div>") if nar.get("s7_ki") else ""}
 </section>'''
 
@@ -795,7 +977,7 @@ def build(args):
     if sec6:
         nav_secs.append(("s6", "评论区实证"))
     if sec7:
-        nav_secs.append(("s7", "BGM×互动"))
+        nav_secs.append(("s7", "BGM 候选×互动"))
     if sec8:
         nav_secs.append(("s8", "变现逻辑"))
     if sec9:
@@ -871,6 +1053,7 @@ def build(args):
 {('<div class="ki">' + esc(nar["s4_ki"]) + "</div>") if nar.get("s4_ki") else ""}
 {('<h3>' + icon_for("关键帧画面") + ' 3.4 爆款关键帧切片</h3><div class="fgallery">' + frame_cards + "</div>") if frame_cards else ""}
 {('<h3>' + icon_for("tag标签") + ' 3.5 各内容主题代表画面</h3><div class="fgallery">' + theme_frames + "</div>") if theme_frames else ""}
+{visual_section}
 </section>
 
 {sec5}{sec6}{sec7}{sec8}{sec9}

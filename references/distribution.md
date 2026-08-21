@@ -6,7 +6,7 @@
 
 - 仅抓取公开抖音内容；不要求 Agent 具备浏览器控制能力。
 - `tools/runtime.py` 负责解析项目运行库和 MediaCrawler，优先使用环境变量，其次使用全局注册表，最后使用项目 `.runtime/py`。
-- 无 GPU 时，口播与 BGM 转写自动降级到 CPU/int8；缺少转写依赖时应先运行 `runtime.py doctor`，不能伪造转写结果。
+- 无 GPU 时，口播与可选 BGM ASR 自动降级到 CPU/int8；抽帧 GPU 不可用时自动走 PyAV CPU；缺少转写依赖时应先运行 `runtime.py doctor`，不能伪造转写结果。
 - 没有登录态时，允许生成公开元数据、视频、抽帧和不依赖评论的报告；评论章节必须标记缺源。
 
 ## 路径与命名
@@ -16,7 +16,7 @@
 - 每个账号必须使用唯一 `--account` slug。`crawl.py` 在 `<root>/accounts/<slug>.json` 记录并绑定 creator `sec_uid`；同一 slug 指向另一个账号时立即拒绝。
 - `process.py` 自动读取当前 `crawl_<account>/douyin/jsonl/`；旧共享目录所有权不明确，必须显式传 `--json`。
 - `comments.py` 只扫描当前 `crawl_<account>/`，并按当前 manifest 的 `aweme_id` 再过滤一次。
-- `tools/analyze.py` 提供统一分析入口：口播转写先行，随后自适应抽帧与 BGM 并行，最后逐帧画面指标与字幕 OCR；任一阶段失败立即非零退出。
+- `tools/analyze.py` 提供统一分析入口：先复用 `media-audio/<account>/published/<url_hash>.mp3` 作为发布成片混合音轨进行口播转写，随后 NVDEC/`scale_cuda` 自适应抽帧与混合音轨非口播区间 BGM 证据分析并行，最后逐帧画面指标与字幕 OCR；任一阶段失败立即非零退出。视觉摘要由报告生成器读取并进入内容矩阵/爆款对比。
 - Windows 路径统一通过参数传入；批处理优先使用 Python `subprocess`，避免 PowerShell 中文路径编码问题。
 
 ## 能力降级
@@ -25,6 +25,7 @@
 |---|---|---|
 | MediaCrawler | 抓取账号/视频及可选评论 | 立即非零退出并报告错误；不切浏览器 API、网页抓取或其他兜底 |
 | GPU/CUDA | `large-v3` + CUDA/float16 | `large-v3` + CPU/int8，或声明转写依赖缺失 |
+| FFmpeg CUDA/NVDEC | `extract_frames.py --device auto|cuda` 的代理检测与高清候选提取 | 单视频自动 PyAV CPU 回退；`frames.json` 写入 `backend` 与 `fallback_reason` |
 | 评论登录态 | 评论抓取与聚合 | 报告保留缺源声明，不推断用户声音 |
 | 真实视频/抽帧 | 视觉证据与报告图片 | 删除或明确标记缺失，不生成替代图片 |
 
@@ -48,11 +49,11 @@ python tools/analyze.py --root <root> --account <slug>
 
 调度顺序固定为：
 
-1. 口播音频转写（音频直连抓取 JSON 的 `music_download_url`，不依赖已下载的视频文件）；
-2. 自适应抽帧与 BGM 转写并行（抽帧读已下载 MP4，BGM 复用同一音频缓存）；
+1. 口播音频转写（优先 `published_audio_url`/兼容 `music_download_url`，缓存到 `media-audio/<account>/published/<url_hash>.mp3`；失败后才用本地视频提取，再用 `speech_url` 远程视频；图文跳过）；
+2. NVDEC/`scale_cuda` 自适应抽帧与混合音轨非口播证据分析并行（BGM 复用 published 文件，按 transcript segments 排除口播窗口；默认不做第二次 ASR，证据不足标记 `unknown/证据不足`）；
 3. 逐帧画面指标与字幕 OCR。
 
-任一阶段失败立即退出，不执行兜底。BGM 不与口播转写同时运行，避免两者争抢 GPU 显存；抽帧为 CPU 任务，与 BGM 并行互不影响。使用 `--skip-bgm` 可跳过 BGM 阶段，口播转写、抽帧与画面分析照常执行。
+任一阶段失败立即退出，不执行全局兜底；抽帧 GPU 只在单视频级别回退 CPU，损坏视频仍 fail-loud。默认 BGM 不加载 ASR，兼容参数 `--music-asr` 会被忽略，因此可与抽帧并行且不争抢显存。使用 `--skip-bgm` 可跳过 BGM 阶段，口播转写、抽帧与画面分析照常执行。
 
 ## 多账号目录隔离
 
@@ -64,6 +65,7 @@ python tools/analyze.py --root <root> --account <slug>
 ├─ crawl_<account>/
 ├─ video-analysis/<account>/
 ├─ videos/<account>/
+├─ media-audio/<account>/published/ # 发布成片混合音轨 mp3（口播/BGM 共享）
 ├─ covers/<account>/
 ├─ transcript/<account>/
 ├─ bgm/<account>/

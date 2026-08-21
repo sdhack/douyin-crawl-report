@@ -2,10 +2,10 @@
 
 > **把一个抖音对标账号「挖透」到极致** — 抓取 · 去重 · 抽帧 · 口播转写 · BGM 分析 · 评论洞察 · 单视频拆解 · 账号级总结 · 对标报告，一键全自动。
 
-把「研究一个对标账号为什么火」从几天的苦力活压到 **几分钟**：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。全程断点续传、按机器配置自适应调度、运行库装项目目录经全局指针复用，开箱即用。
+把「研究一个对标账号为什么火」整理为可断点续传的自动流水线：全量抓取 → 数据处理 → 下载 → 抽帧 → GPU 口播转写 → BGM 归档 → 评论区洞察 → 逐视频拆解 → 账号级聚合 → 固定模板对标报告。实际耗时取决于作品数、评论量、网络与硬件；运行库装项目目录并经全局指针复用。
 
 [![Type](https://img.shields.io/badge/Type-Agent%20Skill-blue.svg)](./SKILL.md)
-[![Version](https://img.shields.io/badge/Version-0.6.8-brightgreen.svg)](./manifest.json)
+[![Version](https://img.shields.io/badge/Version-0.7.1-brightgreen.svg)](./manifest.json)
 [![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Douyin-yellow.svg)](https://www.douyin.com)
 [![ASR](https://img.shields.io/badge/ASR-faster--whisper%20large--v3-green.svg)](./tools/transcribe.py)
@@ -18,7 +18,7 @@
 ```mermaid
 flowchart LR
     A["① 抓取 crawl.py<br/>断点续传 · 随机延时 · 抗风控"] --> B["② 数据处理 process.py<br/>去重 · 互动排序下载清单"]
-    B --> C["③ 下载 + 抽帧 download / extract_frames<br/>多线程 · 多进程 1fps"]
+    B --> C["③ 下载 + 抽帧 download / extract_frames<br/>视频 · 图文 · 封面 · 自适应采样"]
     C --> D["④ 口播转写 transcribe.py<br/>GPU 择优 · 术语纠错"]
     C --> E["⑤ BGM 分析 transcribe_bgm.py<br/>强度 · 情绪 · ×互动交叉"]
     B --> F["⑥ 评论抓取/聚合 crawl（默认100条）→ comments.py"]
@@ -27,7 +27,7 @@ flowchart LR
     E --> G
     G --> H["⑧ 账号聚合 account_metrics.py<br/>发布节奏 · 互动聚类 · 话题 + 高赞评论"]
     H --> I["⑨ 对标报告 report_html.py<br/>v2 固定骨架 · 多图表 · 美学由 AI 决定"]
-    H --> J["⑩ 博主总结 render_report.py<br/>自由 md · 8 套主题随机"]
+    H --> J["⑩ 博主总结 render_report.py<br/>自由 md · AI 定制视觉 token"]
     I -.->|下一账号| A
     J -.->|下一账号| A
 ```
@@ -57,16 +57,16 @@ flowchart LR
 | 阶段 | 工具 | 亮点 |
 |---|---|---|
 | 抓取 | `crawl.py` | 父目录保存当前运行指针，跨 Agent 的主页、评论和续跑都集中到同一目录；只有 `--new-run` 开启新一轮 |
-| 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，只跑增量不重复劳动 |
-| 下载 | `download.py` | 多线程并行，并发按机器自适应 |
-| 画面分析 | `extract_frames.py` + `analyze_frames.py` | 最低 12 点 + 首三秒/镜头突变/低置信度加密，自动聚合画风、色彩、构图、场景、字幕与产品露出候选 |
-| 口播转写 | `transcribe.py` | 直接复用抓取 JSON 的音乐音频 URL；低置信度标记后再结合自适应抽帧字幕核验 |
-| BGM 分析 | `transcribe_bgm.py` | 复用同一音频缓存做能量包络与情绪分析，不再从 MP4 分离音频 |
+| 数据处理 | `process.py` | 按 `aweme_id` 去重 + 互动排序，保留视频/图文类型、图集 URL 与实际音频来源 |
+| 下载 | `download.py` | 多线程并行下载视频、封面和图文原图，并发按机器自适应 |
+| 画面分析 | `extract_frames.py` + `analyze_frames.py` | NVDEC + `scale_cuda` 两阶段抽帧，最低 12 点 + 首三秒/镜头突变/低置信区间加密，默认最多 180 帧；GPU 单视频失败自动 CPU 回退并留痕，自动聚合画风、色彩、构图、场景、字幕与产品露出候选 |
+| 口播转写 | `transcribe.py` | `music_download_url` 视为发布成片混合音轨，优先缓存到 `media-audio/<account>/published/<url_hash>.mp3` 后转写；失败才回退本地 MP4、远程视频；首轮 beam=1，低置信度再 beam=5 |
+| BGM 分析 | `transcribe_bgm.py` | 复用同一发布成片混合音轨，按 transcript segments 排除口播时间窗后做能量/情绪分析；默认不做第二次 Whisper，非口播证据不足标记 `unknown/证据不足` |
 | 评论洞察 | `crawl.py` → `comments.py` | 批量补抓评论，按赞聚合截断，进档案做需求洞察 |
 | 单视频拆解 | `decompose_prep.py` | 标题/时长/时间/互动/口播/帧/BGM/评论全维度档案 + 18 字段标准化标签 |
 | 账号聚合 | `account_metrics.py` | 自动产出 **发布节奏 · 互动交叉聚类 · 话题策略 + 高赞评论** 三维度，博主总结必吃 |
 | 对标报告 | `report_html.py` | **v2 固定骨架直出 HTML**（10 区结构 + 图标系统）：统计数字全部由工具从管线产物实时计算，**多枚 SVG 图表自动生成**（周发布分布/月度趋势/主题环形/点赞分布/BGM 对比/情绪分布）+ 各主题代表帧画廊；**设计美学完全由 AI 决定**（narrative 的 `design` 键给出整套配色/圆角/阴影/字体 token，缺键回落到高可读性基线，反色文字自动推导保证任何配色可读）；封面/关键帧自动内联，内置结构自检 |
-| 博主总结 | `render_report.py` | 自由 md → 自包含 HTML 渲染器（8 套视觉主题随机轮换），用于账号级总结/decompose 长文，**不渲染对标报告** |
+| 博主总结 | `render_report.py` | 自由 md → 自包含 HTML 渲染器，视觉由 AI token 定制，用于账号级总结/decompose 长文，**不渲染对标报告** |
 
 ---
 
@@ -109,7 +109,7 @@ python tools/crawl.py --root <根> --account <slug> --mode creator --target "<se
 # ② 数据处理 + 下载 + 抽帧 + 转写
   python tools/process.py --root <本次运行目录> --account <slug>
 python tools/download.py --root <根> --account <slug>
-python tools/extract_frames.py --root <根> --account <slug>
+python tools/extract_frames.py --root <根> --account <slug> --device auto
 python tools/transcribe.py --root <根> --account <slug> --map term_map.json
 # ③ 评论洞察 + 单视频拆解 + 账号聚合
 python tools/crawl.py --run-dir <本次运行目录> --root <父目录> --account <slug> --mode detail --target "<id1>,<id2>..."
@@ -136,9 +136,9 @@ python tools/report_html.py --root <根> --account <slug> --title "抖音{品类
 
 | 维度 | 探测方式 | 调度规则 | 本机(20核/17G可用/GPU)实测 |
 |---|---|---|---|
-| CPU | `os.cpu_count()` | 抽帧 `min(核,4)`；下载 `min(核,6)` | 抽帧 4 · 下载 6 |
+| CPU | `os.cpu_count()` | CPU 回退抽帧最多 8 worker、且不超过一半逻辑核；下载 `min(核,6)` | 受内存上限继续收敛 |
 | 内存 | Windows `GlobalMemoryStatusEx` | 按「可用GB/单worker峰值」封顶防 OOM | 可用 17GB |
-| GPU | `ctranslate2.get_cuda_device_count()` | 有 GPU→`cuda/float16` + worker 少；无→`cpu/int8` + 放大 worker | 转写 2 worker |
+| GPU | `ctranslate2` + FFmpeg CUDA 探测 | 转写有 GPU→`cuda/float16`；抽帧用 NVDEC/`scale_cuda` 默认 1 worker；不可用或单视频失败回退 CPU | RTX 5070 Ti 抽帧实测可用 |
 
 脚本启动时会打印一行资源快照（如 `[资源] CPU=20核 内存60%(可用17.1GB/42.7GB) GPU=yes -> 下载线程数=6`）。
 
@@ -168,7 +168,7 @@ python tools/render_report.py --source 博主总结.md --inline --design '{"bg":
 | 抓取（creator + 断点续传） | 70 条全量约 **11 分钟**，评论批量抓取 30–40 分钟（随机延时 3–8s）|
 | 下载（多线程） | 70 条 **38 秒** |
 | 转写（GPU large-v3，2 worker） | 19 条 **~1 分钟**、570.9s 素材 19/19 成功；单条短视频 **< 0.3s** |
-| 抽帧（多进程 4，1fps） | **28.7s → 8.3s**（3.5×），578 帧逐条一致 |
+| 抽帧（真实 H.264 单视频，4.78s/720x1280） | CUDA 两阶段约 **3.55s**、CPU 约 **5.28s**，均输出 21 帧；这是单视频临时基准，不代表全量耗时 |
 | 术语纠错 `--map` | 「小包私立装→小包分粒装」txt/json 同步订正，零残留 |
 | 账号聚合 `account_metrics` | 877 天跨度 · 月均 5.4 · 间隔中位 3 天 · 四型 Top 各 5 全命中 |
 | 全量跑通（247 条账号，胶原肽类目） | 评论补抓 **4272 条 / 246 视频**；242 条 GPU 口播转写 **89 分钟**（int8_float32，RTF 0.27–0.30）；BGM 归档 VAD 防音乐幻觉循环；`report_html.py` 一步出 2.5MB 自包含报告（10 封面 + 6 关键帧内联，结构自检通过） |
@@ -186,8 +186,9 @@ douyin-crawl-report/
 │  ├─ crawl.py               抓取主入口（creator/detail/search）+ 断点续传 + 评论提速
 │  ├─ probe.py               资源自适应调度（CPU/GPU/内存）
 │  ├─ process.py             去重 → manifest
-│  ├─ download.py            多线程下载视频+封面
-│  ├─ extract_frames.py      PyAV 多进程自适应抽帧
+│  ├─ download.py            多线程下载视频+封面+图文原图
+│  ├─ audio_source.py        视频音频源选择与共享缓存
+│  ├─ extract_frames.py      NVDEC/scale_cuda 两阶段抽帧 + CPU 回退
 │  ├─ analyze_frames.py      逐帧指标与 OCR 时间轴
 │  ├─ transcribe.py          faster-whisper GPU 转写 + --map 纠错
 │  ├─ transcribe_bgm.py      BGM 强度/情绪归档 + ×互动交叉
@@ -195,7 +196,7 @@ douyin-crawl-report/
 │  ├─ decompose_prep.py      全维度视频档案组装
 │  ├─ account_metrics.py     账号级聚合（发布节奏/互动聚类/话题+高赞评论）
 │  ├─ report_html.py         对标报告 v2 固定骨架生成器（数据全自动 + narrative 槽位 + 结构自检）
-│  ├─ render_report.py       博主总结 md→HTML 渲染器（8 主题随机，自包含 HTML）
+│  ├─ render_report.py       博主总结 md→HTML 渲染器（AI 视觉 token，自包含 HTML）
 │  └─ patch_mediacrawler.py  MediaCrawler 断点续传补丁
 ├─ references/               文档 + 固定报告模板 + 博主总结提示词
 │  ├─ workflow.md            全流程分阶段说明
@@ -208,6 +209,8 @@ douyin-crawl-report/
 ├─ .gitignore
 └─ LICENSE
 ```
+
+音频缓存按发布音轨统一复用：`media-audio/<account>/published/<url_hash>.mp3` 是 `music_download_url` 对应的发布成片混合音轨，口播 ASR 与 BGM 分析共享这一文件；本地 MP4 和远程视频只作为 ASR 失败回退。该文件不是独立纯 BGM，报告中的 BGM 结论必须标注混合音轨、非纯 BGM，并注明统计为描述性相关、非因果。
 
 ---
 
@@ -229,6 +232,11 @@ douyin-crawl-report/
 
 ## 更新日志
 
+- **v0.7.1（2026-08-21）**：统一音频真实语义：`music_download_url` 定义为发布成片混合音轨，不再称为独立纯 BGM。manifest 新增 `published_audio_url`/`published_audio_key`/`published_audio_kind`；统一缓存到 `media-audio/<account>/published/<url_hash>.mp3`，口播优先直连该文件，失败后回退本地 MP4 再远程视频；BGM 复用同一文件并按 transcript segments 排除口播窗口，默认不做第二次 Whisper，非口播证据不足标记 `unknown/证据不足`。报告统一标注混合音轨、非纯 BGM 和相关非因果边界。旧版 v0.7.0 的独立 `music/` 口径已被本版本替代。
+
+- **v0.7.0（2026-08-21，已被 v0.7.1 替代）**：音频链路拆分为口播与音乐两条独立缓存：口播从本地视频最终混合音轨提取到 `media-audio/<account>/speech/*.m4a`，音乐缓存到 `media-audio/<account>/music/<music_key>.mp3`；口播首轮 beam=1、低置信度再 beam=5，BGM 默认关闭二次 ASR、显式 `--music-asr` 才启用。抽帧改为 NVDEC + `scale_cuda` 两阶段代理检测/高清候选提取，支持 `--device auto|cuda|cpu`、默认 180 帧软上限、感知/直方图去重和单视频 CPU 回退，`frames.json` 留存后端与回退原因。视觉摘要已进入 `report_html.py` 的报告内容矩阵与爆款对比。`RunProgress` 状态统一记录阶段耗时和抓取优化吞吐；creator 详情请求会跳过字段完整作品，零评论作品跳过评论请求，失败按单作品留痕。抽帧全量耗时未作声明，上述仅列单视频基准。
+
+- **v0.6.9（2026-08-21）**：89 条公开作品全链路实测修复。抓取 dry-run 改为零副作用；Windows 包装器与子进程统一 UTF-8、无缓冲输出；详情/评论单请求增加指数退避重试、真实 `uniform(min,max)` 延时和失败 `aweme_id`；已有 Edge 调试端口自动复用，避免误选空端口等待；音乐 URL 增加 `url_list` 回退。数据层新增视频/图文分流，5 条图文按原图下载并导入统一 `frames.json`，不再伪报视频失败；manifest 原子写并记录独立音乐/视频音源，图文不转写；BGM 归档、`bgm_cross.py` 排除图文并校验完整性；抽帧上限提升到 8 worker 且受半数逻辑核和内存双重约束；评论主题改为按规则顺序单归类；报告补齐移动端长标题、导航、网格、表格与图表防溢出规则。实测抓取 89/89、评论 2133 条、84 视频+5 图文下载完整、口播/BGM 84/84。
 - **v0.6.8（2026-08-21）**：48 条全量复测（14→48 断点增量）抓取核对与静默降级修复。① 抓取完整性核对：MediaCrawler `save_creator` 补丁落公开计数（作品/粉丝/获赞，无昵称隐私字段）到 `creator_profile.json`，`crawl.py` 抓后比对唯一视频数与主页 `aweme_count`——未达上限即漏抓时直接 `exit(1)` 阻止残缺数据进入报告阶段，达 `--max` 上限仍不足则明确提示调大重跑。② `extract_frames.py` 解码失败 fail-loud：下载截断的 MP4 会让 PyAV 中途崩（jpg 落一半、无 frames.json），此前静默按 0 帧 + exit 0 放行，下游把该视频当 0 帧吞掉；现聚合失败清单并 `exit(1)`，附重下处置指引。③ `bgm_cross.py` 重跑崩溃：自身产物 `_cross.json` 落在 BGM 归档目录，二次运行时被当视频数据加载致 `KeyError: aweme_id`；现跳过所有 `_` 前缀内部文件。④ `transcribe.py`/`transcribe_bgm.py`/`extract_frames.py`/`download.py` 进度 print 补齐 `flush=True`（v0.6.7 只修了 `analyze_frames.py`，其余长时后台任务重定向日志仍全程不可见）。实测：48 条增量重跑全链路（含 1 条损坏视频重下补抽）无死循环、无静默漏抓，总帧数 6910、逐帧分析与口播转写 48/48。
 - **v0.6.7（2026-08-21）**：全流程实测（14 视频真实账号）性能与产物路径修复。`analyze_frames.py` 由单进程逐帧串行改为进程池并行（按核数/内存封顶 8 worker，帧间无共享状态）并支持断点续帧（`analysis` 已存在的帧直接复用）——旧版每帧起一个 tesseract 子进程实测约 2s/帧，14 视频 3559 帧需约 2 小时，并行后 11.5 分钟完成（提速约 8.6×）；进度 print 全部 `flush=True` 修复重定向日志下逐条进度不可见。`report_html.py` 相对 `--out` 一律解析到 `--root` 运行根下，不再随调用方 cwd 漂移污染父目录。
 - **v0.6.6（2026-08-20）**：第二轮全链路审计修复（3 组并行深审 + 跨工具契约核验，35 项发现甄别后修 17 项）。关键修复：`report_html.py` 点赞直方图分箱边界（0 赞视频曾落入"10万+"档）与 TOP 榜裸 `fromtimestamp` 崩溃点、SVG 标签转义；`account_metrics.py` 空数据 `max()` 崩溃与全 0 赞除零；`comments.py`/`transcribe_bgm.py` 落盘改原子写；`decompose_prep.py` 半截 comments.json 容错、帧数不再冒充时长；`extract_frames.py` `--fps 0` 校验与 `frame.time` falsy 陷阱；`probe.py` 低内存回退方向反转修正；`crawl.py` 运行锁 stale 检测接管。新增 26 项第二轮回归测试并用真实账号数据交叉验证分布图逐档正确。

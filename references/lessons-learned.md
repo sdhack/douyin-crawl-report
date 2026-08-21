@@ -20,11 +20,11 @@
 ## 内容分析
 
 - **视觉分析必须真实**：对抽帧做真实视觉描述（格式/场景/人物/器物/构图/风格），缺失项用批量推理管线补齐。不得用推断冒充真实分析——报告页脚需注明"全部为真实视觉分析"。
-- **BGM 分类规则**：以歌词特征分类（如含"小神仙/龙虎山"为《小神仙》、含"朋友/大家/直播间"等口语词为口播原声、无歌词为纯音乐），避免误分类。
-- **BGM 多为口播原声**（2026-08 实测）：45 首唯一"音乐"中绝大多数转写文本与视频语音一致，说明账号几乎不依赖外部配乐。报告需如实说明，不要臆断"配乐策略"。
-- **BGM 归档固定 large-v3**（2026-08）：口播与 BGM 复用同一模型（已缓存到项目 `models_cache`，免二次联网）。**不要换 small**——small 未缓存时经 HF 镜像下载会因 xet/限速失败（`Distant resource does not seem to be on huggingface.co`），而 large-v3 已缓存可直接用、速度也可接受。
-- **BGM 归档是启发式、非曲目识别**（`tools/transcribe_bgm.py`）：用 PyAV 能量包络（低频占比判 BGM 强度 none/light/full）+ large-v3 识别 + 启发式 mood。强度阈值偏主观、未做音源去重与曲目比对，报告须标注"描述性相关、非因果"。
-- **`bgm_text` 在无 BGM 口播视频里约等于整段口播**：不要把它当"歌词线索"引用；只有 `vocal=singing` 的视频才可能是唱段。
+- **BGM 分类不能假定存在独立音乐轨**：`music_download_url`/`published_audio_url` 是发布成片混合音轨，绝大多数情况下包含口播；报告应区分口播原声、混合音轨中的非口播证据和真正的歌曲识别，不要把混合音轨直接称为纯音乐或独立 BGM。
+- **BGM 多为口播原声**（2026-08 实测）：45 首唯一音频中绝大多数转写文本与视频语音一致，说明账号几乎不依赖可独立分离的外部配乐。报告需如实说明，不要臆断"配乐策略"。
+- **BGM 默认不加载模型**（2026-08）：BGM 复用已缓存的发布成片混合音轨，并按口播 transcript segments 排除语音窗口，只做剩余非口播区间的能量/低频/情绪启发式分析，避免无收益的二次 ASR。`--music-asr` 仅为兼容旧命令而保留，当前会被忽略并记录 `deprecated_ignored`；不能把口播转写冒充歌词。
+- **BGM 归档是启发式、非曲目识别**（`tools/transcribe_bgm.py`）：默认用 PyAV 对排除口播后的非口播区间计算能量包络（低频占比判 BGM 强度 none/light/full）+ 启发式 mood；`--music-asr` 不再加载 large-v3，也不会对发布混合音轨重复 Whisper。强度阈值偏主观、未做音源去重与曲目比对，非口播证据不足时必须写 `unknown/证据不足`，报告须标注"描述性相关、非因果"。
+- **`bgm_text` 默认始终为空**：不能拿口播 transcript 填充，也不能把混合音轨文本当歌词结论；当前 `--music-asr` 只记录请求状态 `deprecated_ignored`，如需真正歌曲识别必须另行设计独立音源和模型成本评估。
 - **BGM×互动交叉揭示"该配的配到位"杠杆**（`tools/bgm_cross.py`，食品类账号实测）：轻 BGM 垫底内容的均赞约为纯口播的 **5.8×**、收藏约 15×、分享约 20×；情绪上"明快节奏"均赞约为"叙事起伏"的 5×，爆款 TOP10 大比例为明快节奏。账号整体 BGM 即使克制（本例七成纯干音），重点内容也会配轻 BGM + 明快节拍。**此数字取 `bgm/_cross.json`，报告勿手写。**
 - **直播话术口音校对**（茶类目实测示例，方法通用）：主播方音导致大量误识别，按「误识别类型-出现场景-修正依据」对照表修正：
   - 产品名：某产品品牌名曾被误识别为 12 种同音近形变体
@@ -53,10 +53,10 @@
 
 - **行内补丁正则禁用 `\s`，必须用 `[ \t]`**：`(?m)^VAR\s*=\s*\d+...\s*$` 里的 `\s` 会匹配换行——`CRAWLER_MAX_SLEEP_SEC = 2\n\n# 注释行` 会被 `\s*` 连吞两行再被 `(?:#.*)?` 吃掉注释行，150 行文件被替换成 148 行且丢失一行注释。历史事故：该 bug 使 sleep/comments 两个 env 补丁长期 `verify-failed`（被单行防护拦住没写盘），`MC_SLEEP_SEC`/`MC_COMMENTS_COUNT` 从未真正生效。修复：全部空白匹配改 `[ \t]`。
 - **旧版无锚定 `\d+` 正则会污染整个 base_config.py**：曾把全文件所有数字字面量（`utf-8` 编码声明、版权年份、`9222` 端口、`START_PAGE=1`、注释里的行号）统统替换成 env 表达式，文件无法导入。三重防护：行首锚定 `(?m)^VAR`、`changed > 1` 即拒绝写盘、写后回读 marker 验证。
-- **`.bak` 可能是污染后的假备份**：补丁函数只在 `.bak` 不存在时创建；若首次运行已污染、后续运行才建 `.bak`，备份里存的也是污染稿（本次实测 `.bak` 与污染稿逐行相同）。恢复时不能盲信 `.bak`，要找干净副本对照（本次用同盘嵌套安装副本 `MediaCrawler/MediaCrawler/config/base_config.py`），并核对关键默认值（本例：`IP_PROXY_POOL_COUNT=2`、`CDP_DEBUG_PORT=9222`、`BROWSER_LAUNCH_TIMEOUT=60`、`START_PAGE=1`、`CRAWLER_MAX_NOTES_COUNT=15`、`MAX_CONCURRENCY_NUM=1`、`CRAWLER_MAX_COMMENTS_COUNT_SINGLENOTES=10`、`CRAWLER_MAX_SLEEP_SEC=2`）。
-- **恢复后必须做"仅 2 行差异"验证**：还原干净稿→用修复后的补丁函数重打→diff 应恰好等于注入的两个 env 行；再用 `MC_SLEEP_SEC=3.5`/`MC_COMMENTS_COUNT=100` 环境变量导入 config 实测覆盖生效。
+- **0.7.0 不依赖 `.bak` 恢复**：所有 `crawl.py` 注入都采用原子覆盖且不生成备份；版本门禁失败即停止，不写入不兼容的 MediaCrawler 源码。若需恢复，使用上游干净副本或重装 MediaCrawler，不读取或信任 `.bak`。
+- **注入后的版本门禁必须复核**：在干净上游副本上验证 `MC_SLEEP_MIN/MC_SLEEP_MAX` 与 `MC_COMMENTS_COUNT` 的注入、导入和实际覆盖；门禁不通过就停止，不以放宽正则或继续运行代替修复。
 - **`verify-failed` 返回值是防护生效的信号，不是误报**：见到它先复现替换过程逐步 diff（old/new 行数、差异行），不要简单放宽防护。
-- **给三方源码打补丁前一律先备份**：`patch_mediacrawler.py` 也补上了 `.cursor.bak`；任何写盘补丁都要可回滚。
+- **三方源码注入的当前规则**：0.7.0 的 `crawl.py` 只做原子覆盖、不生成 `.bak`；回滚统一使用上游干净副本/重装，版本门禁失败立即停止。
 - **HTML 报告转义必须全覆盖并配 XSS 冒烟测试**：`report_html.py` 曾有 20+ 处动态文本裸拼（TOP 榜标题/关键帧图注/评论卡片与分组/BGM 标签情绪条/narrative 全部槽位/标题 kicker 副标题/pills/页脚附加）。规则：所有动态文本（数据源 + narrative 槽位）拼 HTML 前必须过 `esc()`；测试用 `<script>alert`、`<img onerror`、`<b>` 载荷分别注入 manifest 标题、评论内容、narrative intro，断言输出中只见转义后的实体。
 
 ## 统计正确性与空数据容错（2026-08-20 第二轮审计沉淀）
@@ -85,5 +85,23 @@
 - **bgm_cross 不能裸读 BGM 归档目录**：其自身产物 `_cross.json` 与 `_manifest.json` 同目录，重跑/增量跑时被当视频数据加载直接 `KeyError: aweme_id` 崩溃（首跑无此文件所以测试不出来）。规则：内部产物一律 `_` 前缀命名，读取侧统一 `startswith("_")` 跳过。
 - **"lessons 已修复"≠全量修复**：v0.6.7 的 flush=True 只落在 analyze_frames.py，transcribe/transcribe_bgm/extract_frames/download 四个长时工具仍无 flush——后台重定向日志全程不可见直到进程退出，只能靠文件系统数产物监控。教训：横切型修复（flush/原子写/转义）落地后必须全目录扫一遍同类调用点，不能只修发现问题的那一个文件。
 - **主页作品数核对已自动化**（v0.6.8）：save_creator 补丁落公开计数（aweme_count 等，无昵称隐私字段）到 `creator_profile.json`，crawl.py 抓后比对唯一视频数——未达 --max 上限即漏抓直接 exit(1)，达上限仍不足则提示调大重跑断点续传。此前"14/48 漏抓"正是 --max 裁剪 + 无核对静默放行所致。
-- **评论"obtained"日志 ≠ 有评论**：MediaCrawler `get_comments` 对 0 评论视频同样打印 "comments have all been obtained"，判断覆盖完整性要用 manifest 的 comments 字段交叉核对（本例 29 条零评论视频 comments=0 全部真实，非漏抓）。
-- **管线阶段可乱序增量执行**：口播转写与 BGM 共用 `bgm/<account>/audio/` 缓存（都从 music_download_url 取源），BGM 先跑完的音频转写直接复用；extract_frames 的 resume config 含 needs_visual_review 标志，转写后标志变化仅触发受影响视频重抽。乱序执行（BGM+抽帧 → 转写 → 补抽）比严格串行总耗时更短，前提是最后各阶段都重跑一次补增量。
+- **评论"obtained"日志 ≠ 有评论**：MediaCrawler `get_comments` 对 0 评论视频同样打印 "comments have all been obtained"；请求裁剪应使用 MediaCrawler 作品元数据的 `comment_count=0`，覆盖完整性再用评论产物集合交叉核对（历史样本中 29 条零评论视频均为真实零评论，非漏抓）。
+- **音频缓存必须按发布音轨统一复用**：`published_audio_url`（兼容 `music_download_url`/`music_url`/`audio_url`）对应发布成片混合音轨，按 URL hash 原子缓存到 `media-audio/<account>/published/<url_hash>.mp3`；口播 ASR 与 BGM 分析共享该文件。下载或解码失败才回退本地 MP4，最后回退 `speech_url` 远程视频。报告和 JSON 应保留实际来源、哈希、路径、`source_kind` 与回退原因。
+- **口播转写应先快后精**：large-v3 首轮 `beam_size=1`，只对空段、低语言概率或低平均 logprob 音频重跑 `beam_size=5`；BGM 复用已有口播 transcript 排除语音窗口，默认不做二次 ASR，兼容参数 `--music-asr` 也会被忽略，避免无收益的显存和 token 消耗。
+- **GPU 抽帧要真实落到解码/缩放链路**：NVDEC + `scale_cuda` 代理检测后，只提取候选高清帧；`--device auto|cuda|cpu`、180 帧软上限、感知/直方图去重和最短间隔共同防止帧数膨胀。GPU 单视频失败可回退 PyAV CPU，但 `frames.json` 必须写 `backend`/`fallback_reason`；损坏视频仍需 fail-loud。
+- **阶段可乱序增量执行但要区分显卡资源**：口播转写完成后再启动抽帧/BGM 是默认调度；BGM 默认无 ASR，兼容参数 `--music-asr` 也会被忽略，因此可与 NVDEC 抽帧并行。各阶段断点配置包含输入与版本；`RunProgress` 的 `run-state.json` 同时记录阶段 `duration_sec` 和抓取优化吞吐。乱序执行后最后重跑各阶段补齐增量。
+
+## 混合图文与抓取韧性（2026-08-21 89 条全量复测沉淀）
+
+- **`aweme_type=68` 不能按视频处理**：混合主页中的图文没有可解码 MP4。manifest 必须保留作品类型与 `note_urls`，下载时把原图落到 `images/<account>/<aweme_id>/`，抽帧阶段再把原图导入统一 `frames.json` 契约；否则下载会伪报失败，视觉报告也会漏样本。
+- **详情/评论的瞬时 Argus 拦截要在单请求层重试**：只重试整个 MediaCrawler 进程会重复已完成的大批请求。详情与评论单条 API 应指数退避重试并记录具体 `aweme_id`，最终仍由作品数和评论覆盖集合做质量门禁。
+- **延时区间必须在每次请求时真正取样**：仅在进程启动时随机一次会让整轮请求保持固定节奏。使用 `uniform(sleep_min,sleep_max)` 逐请求取样，重试也重新取样。
+- **短链接任务应优先复用已存在的 CDP 服务**：9222 已有 Edge 时直接连接；盲选下一个端口可能启动等待但无人登录。连接已有浏览器时只断开 CDP，不关闭用户浏览器。
+- **dry-run 必须零副作用**：预览命令不能创建时间戳运行根、当前指针、账号绑定或锁目录，否则仅查看命令也会改变后续续跑选择。
+- **Windows 子进程日志统一 UTF-8 与无缓冲**：`PYTHONUTF8=1` + `PYTHONIOENCODING=utf-8` + `PYTHONUNBUFFERED=1`，避免中文日志乱码并确保长任务进度及时可见。
+- **音频 URL 要有结构化回退并留痕**：抓取层先兼容 `play_url.url_list`；manifest 保存 `published_audio_url`/兼容旧字段及视频 `speech_url`。口播优先走发布成片混合音轨，失败后走本地 MP4、再走远程视频；BGM 复用同一发布音轨并排除口播窗口，不把它写成独立纯 BGM。应记录 `source_kind`、URL hash、实际路径和 `fallback_reason`，这不是静默降级，报告和归档都能追溯实际音源。
+- **详情/评论请求应按作品字段裁剪**：creator 详情已有完整字段时跳过 detail 请求；MediaCrawler 作品元数据明确 `comment_count=0` 的作品跳过评论请求；每次优化都通过 `saved_detail_requests`/`skipped_comment_requests` 计数并写入 `RunProgress`，不能用“评论 obtained”日志代替真实覆盖核验。
+- **评论主题统计要与口径声明一致**：若报告声明“一条评论只计入首个命中主题”，实现必须按规则顺序命中后立即 `break`；对每个正则独立计数会让同一评论重复归类，主题占比总和失真。
+- **BGM 交叉统计必须排除图文并校验集合完整性**：manifest 是全部作品，BGM 只适用于视频。直接以 manifest 总数作分母会把图文计入 `n`、压低所有占比；应先过滤 `aweme_type=68`，再校验每个视频都有 BGM 归档，缺源直接失败。
+- **小倍数不能被低精度舍入成零**：轻 BGM 组可能远低于纯口播组，一位小数会把真实的非零比值显示为 `0.0`。交叉统计至少保留三位小数，并在日志中明确点赞、收藏、分享指标名。
+- **结构自检通过不代表移动端无横向溢出**：长标题、表格最小内容宽度和多列网格会把页面撑出窄视口。报告交付前必须同时渲染桌面与移动截图；移动 CSS 要给网格使用 `minmax(0,1fr)`、长标题允许断行、表格局部横向滚动，并限制页面本身 `overflow-x`。
